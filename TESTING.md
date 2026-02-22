@@ -212,17 +212,21 @@ chmod +x publish-test-world.sh
    - Click on "Cozy Farm 01" (or your world name)
 
 5. **View the world**:
-   - The background should load from the renderpack
-   - Plants should appear on the grid
+   - The background should load from the renderpack and scale to fit the viewport
+   - Plants should appear on the grid, correctly aligned with the background
+   - No scrollbars should appear (the world fits the screen)
    - Use the Eye icon (👁️) in the top right to toggle debug mode
+   - Works on desktop and mobile (portrait/landscape)
 
 ## Debug Mode Features
 
 When debug mode is enabled (Eye icon):
-- **Yellow border**: Shows the plant area rectangle
-- **Red grid**: Shows individual cell boundaries
+- **Yellow border**: Shows the plant area rectangle (scaled and aligned with background)
+- **Red grid**: Shows individual cell boundaries (scaled and aligned)
 - **Cell coordinates**: Displayed in each cell (col,row)
 - **Plant hover info**: Hover over a plant to see crop, stage, slot, and ID
+
+**Note**: All overlays (grid, plants) are automatically scaled to match the responsive background image. The grid computation uses natural layout pixel coordinates, and scaling is applied at render time.
 
 ## Troubleshooting
 
@@ -271,6 +275,35 @@ After the MVP is working:
 3. Implement growth timers
 4. Add animations and transitions
 5. Support for multiple maps per world
+
+## Responsive Behavior
+
+The world renderer is fully responsive and works on all screen sizes:
+
+### Desktop
+- Background scales to fit the viewport (below the top bar)
+- No scrollbars - the entire world is visible
+- Debug grid and plants scale proportionally with the background
+- Pixel art remains crisp with `image-rendering: pixelated`
+
+### Mobile
+- **Portrait mode**: Background scales to fit width, centered vertically
+- **Landscape mode**: Background scales to fit height, centered horizontally
+- Touch-friendly debug toggle button
+- All overlays remain aligned regardless of orientation
+
+### Technical Details
+The renderer uses:
+- **Container**: `flex-1 overflow-hidden` (fills remaining viewport after header)
+- **Background**: `object-fit: contain` with `object-position: center`
+- **Overlay scaling**: Computed via `ResizeObserver` to match scaled background
+- **Coordinate system**: Grid math uses natural layout pixels, scaling applied at render time
+
+### Testing Responsive Behavior
+1. Resize browser window - background and overlays scale smoothly
+2. Test on mobile device or browser dev tools
+3. Rotate device (portrait ↔ landscape) - layout adapts without scrollbars
+4. Enable debug mode to verify grid alignment at different sizes
 
 ## Notes
 

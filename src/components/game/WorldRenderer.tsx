@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useGameContext } from '@/contexts/GameContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useWorldStates } from '@/hooks/useWorldStates';
@@ -157,99 +157,233 @@ export function WorldRenderer() {
     );
   }
 
-  // Compute grid
+  // Compute grid (in natural layout pixel coordinates)
   const grid = computeGrid(renderpack.layout);
 
-  // Render world
+  // Render world with responsive scaling
   return (
-    <div className="w-full h-full relative overflow-auto bg-gradient-to-b from-sky-300 to-green-200 dark:from-sky-900 dark:to-green-950">
+    <ResponsiveWorldView
+      backgroundUrl={renderpack.backgroundUrl}
+      layoutName={renderpack.layout.name}
+      grid={grid}
+      plants={plants}
+      isPlantsLoading={isPlantsLoading}
+      renderpack={renderpack}
+      showDebugGrid={showDebugGrid}
+      onToggleDebug={() => setShowDebugGrid(!showDebugGrid)}
+    />
+  );
+}
+
+/**
+ * ResponsiveWorldView - Renders the world with responsive scaling
+ * 
+ * Strategy:
+ * 1. Use object-fit: contain to scale background image responsively
+ * 2. Measure the rendered image size using ResizeObserver
+ * 3. Compute scale factor and offset to align overlays
+ * 4. Render overlays (grid, plants) in a scaled container
+ */
+interface ResponsiveWorldViewProps {
+  backgroundUrl: string;
+  layoutName: string;
+  grid: ReturnType<typeof computeGrid>;
+  plants?: PlantState[];
+  isPlantsLoading: boolean;
+  renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
+  showDebugGrid: boolean;
+  onToggleDebug: () => void;
+}
+
+function ResponsiveWorldView({
+  backgroundUrl,
+  layoutName,
+  grid,
+  plants,
+  isPlantsLoading,
+  renderpack,
+  showDebugGrid,
+  onToggleDebug,
+}: ResponsiveWorldViewProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  
+  // Track natural image size and rendered size
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+  const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+
+  // Update natural size when image loads
+  useEffect(() => {
+    const img = imageRef.current;
+    if (!img) return;
+
+    const updateNaturalSize = () => {
+      setNaturalSize({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      });
+    };
+
+    if (img.complete) {
+      updateNaturalSize();
+    } else {
+      img.addEventListener('load', updateNaturalSize);
+      return () => img.removeEventListener('load', updateNaturalSize);
+    }
+  }, [backgroundUrl]);
+
+  // Track container size and compute rendered image size
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateSizes = () => {
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      setContainerSize({ width: containerWidth, height: containerHeight });
+
+      // Compute rendered size using object-fit: contain logic
+      if (naturalSize.width > 0 && naturalSize.height > 0) {
+        const scaleX = containerWidth / naturalSize.width;
+        const scaleY = containerHeight / naturalSize.height;
+        const scale = Math.min(scaleX, scaleY);
+        
+        setRenderedSize({
+          width: naturalSize.width * scale,
+          height: naturalSize.height * scale,
+        });
+      }
+    };
+
+    updateSizes();
+
+    const resizeObserver = new ResizeObserver(updateSizes);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [naturalSize]);
+
+  // Compute scale factor and offset for overlay alignment
+  // The overlay needs to match the scaled background image
+  const scale = naturalSize.width > 0 ? renderedSize.width / naturalSize.width : 1;
+  const offsetX = (containerSize.width - renderedSize.width) / 2;
+  const offsetY = (containerSize.height - renderedSize.height) / 2;
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full relative overflow-hidden bg-gradient-to-b from-sky-300 to-green-200 dark:from-sky-900 dark:to-green-950"
+    >
       {/* Debug Grid Toggle */}
       <div className="absolute top-4 right-4 z-20">
         <Button
           variant="outline"
           size="icon"
-          onClick={() => setShowDebugGrid(!showDebugGrid)}
+          onClick={onToggleDebug}
           className="bg-white/90 dark:bg-black/90 backdrop-blur-sm"
         >
           {showDebugGrid ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
         </Button>
       </div>
 
-      {/* Background Image */}
-      <div className="relative">
-        <img
-          src={renderpack.backgroundUrl}
-          alt={renderpack.layout.name}
-          className="block"
-          style={{ imageRendering: 'pixelated' }}
-        />
+      {/* Background Image - Responsive with object-fit: contain */}
+      <img
+        ref={imageRef}
+        src={backgroundUrl}
+        alt={layoutName}
+        className="absolute inset-0 w-full h-full object-contain object-center"
+        style={{ imageRendering: 'pixelated' }}
+      />
 
-        {/* Plant Area Outline (Debug) */}
-        {showDebugGrid && (
+      {/* Scaled Overlay Container - Aligned with scaled background */}
+      {naturalSize.width > 0 && (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            left: offsetX,
+            top: offsetY,
+            width: renderedSize.width,
+            height: renderedSize.height,
+          }}
+        >
+          {/* Inner container with scale transform */}
           <div
-            className="absolute border-2 border-yellow-400 pointer-events-none"
             style={{
-              left: grid.plantArea.x,
-              top: grid.plantArea.y,
-              width: grid.plantArea.width,
-              height: grid.plantArea.height,
+              transform: `scale(${scale})`,
+              transformOrigin: 'top left',
+              width: naturalSize.width,
+              height: naturalSize.height,
             }}
-          />
-        )}
-
-        {/* Grid Overlay (Debug) */}
-        {showDebugGrid && (
-          <svg
-            className="absolute inset-0 pointer-events-none"
-            style={{ width: '100%', height: '100%' }}
           >
-            {grid.cells.map((cell, i) => (
-              <g key={i}>
-                <rect
-                  x={cell.x}
-                  y={cell.y}
-                  width={cell.width}
-                  height={cell.height}
-                  fill="none"
-                  stroke="rgba(255, 0, 0, 0.3)"
-                  strokeWidth="1"
-                />
-                <text
-                  x={cell.x + cell.width / 2}
-                  y={cell.y + cell.height / 2}
-                  fontSize="10"
-                  fill="rgba(255, 255, 255, 0.8)"
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                >
-                  {cell.col},{cell.row}
-                </text>
-              </g>
-            ))}
-          </svg>
-        )}
-
-        {/* Plants Layer */}
-        {isPlantsLoading ? (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="bg-white/90 dark:bg-black/90 backdrop-blur-sm rounded-lg px-4 py-2">
-              <p className="text-sm text-muted-foreground">Loading plants...</p>
-            </div>
-          </div>
-        ) : (
-          <div className="absolute inset-0 pointer-events-none">
-            {plants?.map((plant) => (
-              <PlantSprite
-                key={plant.id}
-                plant={plant}
-                grid={grid}
-                renderpack={renderpack}
-                showDebug={showDebugGrid}
+            {/* Plant Area Outline (Debug) */}
+            {showDebugGrid && (
+              <div
+                className="absolute border-2 border-yellow-400"
+                style={{
+                  left: grid.plantArea.x,
+                  top: grid.plantArea.y,
+                  width: grid.plantArea.width,
+                  height: grid.plantArea.height,
+                }}
               />
-            ))}
+            )}
+
+            {/* Grid Overlay (Debug) */}
+            {showDebugGrid && (
+              <svg
+                className="absolute inset-0"
+                style={{ width: naturalSize.width, height: naturalSize.height }}
+              >
+                {grid.cells.map((cell, i) => (
+                  <g key={i}>
+                    <rect
+                      x={cell.x}
+                      y={cell.y}
+                      width={cell.width}
+                      height={cell.height}
+                      fill="none"
+                      stroke="rgba(255, 0, 0, 0.3)"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={cell.x + cell.width / 2}
+                      y={cell.y + cell.height / 2}
+                      fontSize="10"
+                      fill="rgba(255, 255, 255, 0.8)"
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                    >
+                      {cell.col},{cell.row}
+                    </text>
+                  </g>
+                ))}
+              </svg>
+            )}
+
+            {/* Plants Layer */}
+            {isPlantsLoading ? (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-auto">
+                <div className="bg-white/90 dark:bg-black/90 backdrop-blur-sm rounded-lg px-4 py-2">
+                  <p className="text-sm text-muted-foreground">Loading plants...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="absolute inset-0">
+                {plants?.map((plant) => (
+                  <PlantSprite
+                    key={plant.id}
+                    plant={plant}
+                    grid={grid}
+                    renderpack={renderpack}
+                    showDebug={showDebugGrid}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
