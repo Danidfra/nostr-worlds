@@ -266,9 +266,17 @@ When debug mode is enabled (Eye icon):
 - The app will **not crash** if crops.json is missing or invalid
 - Plants will render as placeholder tiles (🌱 on green background)
 - **Check browser console** for crops loading status:
-  - Success: `[useRenderpack] Crops metadata loaded: N crops`
+  - Success: `[useRenderpack] Crops metadata loaded: N crops ["carrot", "wheat", ...]`
   - Missing/Invalid: `[useRenderpack] No crops metadata (using placeholder sprites)`
-- **crops.json validation**: Must have structure `{ crops: CropMetadata[] }`
+- **crops.json format**: Must use dictionary structure (not array):
+  ```json
+  {
+    "crops": {
+      "carrot": { "file": "assets/crops/carrot.png", "stages": 4, "harvestStage": 3 },
+      "wheat": { "file": "assets/crops/wheat.png", "stages": 5, "harvestStage": 4 }
+    }
+  }
+  ```
   - If crops.json exists but has invalid structure, it will be ignored (no crash)
 
 ## Expected Renderpack Structure

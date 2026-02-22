@@ -131,24 +131,27 @@ export interface MapLayout {
 }
 
 /**
- * Crop Metadata
+ * Crop Metadata (individual crop)
  */
 export interface CropMetadata {
-  /** Crop identifier */
-  id: string;
-  /** Display name */
-  name: string;
   /** Spritesheet filename (relative to renderpack) */
   file: string;
   /** Number of growth stages */
   stages: number;
-  /** Frame width in pixels */
-  frameWidth?: number;
+  /** Stage index when crop is ready to harvest */
+  harvestStage?: number;
 }
 
 /**
- * Crops Collection
+ * Crops Collection (dictionary format)
  */
 export interface CropsMetadata {
-  crops: CropMetadata[];
+  /** Dictionary of crops keyed by crop ID */
+  crops: Record<string, CropMetadata>;
+  /** Optional version */
+  version?: string;
+  /** Optional tile size */
+  tileSize?: number;
+  /** Optional layout defaults */
+  layoutDefaults?: Record<string, unknown>;
 }

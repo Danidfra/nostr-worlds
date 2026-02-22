@@ -405,10 +405,9 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
   const { px, py } = position;
   const tileSize = grid.tileSize;
 
-  // Try to load crop metadata if available
-  // Safe check: ensure crops is an array before calling .find()
-  const cropsArray = Array.isArray(renderpack.crops?.crops) ? renderpack.crops.crops : [];
-  const cropMeta = cropsArray.find((c) => c.id === plant.crop);
+  // Try to load crop metadata from dictionary
+  // Safe check: ensure crops is an object (dictionary) before accessing
+  const cropMeta = renderpack.crops?.crops?.[plant.crop];
   const hasCropSprite = cropMeta && cropMeta.file;
 
   return (

@@ -46,18 +46,18 @@ async function fetchCrops(renderpackUrl: string): Promise<CropsMetadata | null> 
     
     const data = await response.json();
     
-    // Validate structure: must have { crops: CropMetadata[] }
+    // Validate structure: must have { crops: Record<string, CropMetadata> }
     if (!data || typeof data !== 'object') {
       console.debug('[useRenderpack] Invalid crops.json: not an object');
       return null;
     }
     
-    if (!Array.isArray(data.crops)) {
-      console.debug('[useRenderpack] Invalid crops.json: crops is not an array');
+    if (!data.crops || typeof data.crops !== 'object' || Array.isArray(data.crops)) {
+      console.debug('[useRenderpack] Invalid crops.json: crops must be a dictionary object');
       return null;
     }
     
-    // Valid structure
+    // Valid structure - crops is a dictionary
     return data as CropsMetadata;
   } catch (error) {
     console.debug('[useRenderpack] Failed to fetch crops.json:', error);
@@ -117,10 +117,11 @@ export function useRenderpack(renderpackUrl?: string, layoutId?: string) {
       ]);
 
       // Debug logging for crops metadata
-      if (crops && Array.isArray(crops.crops)) {
+      if (crops && crops.crops && typeof crops.crops === 'object') {
+        const cropIds = Object.keys(crops.crops);
         console.debug(
-          `[useRenderpack] Crops metadata loaded: ${crops.crops.length} crops`,
-          crops.crops.map((c) => c.id)
+          `[useRenderpack] Crops metadata loaded: ${cropIds.length} crops`,
+          cropIds
         );
       } else {
         console.debug('[useRenderpack] No crops metadata (using placeholder sprites)');
