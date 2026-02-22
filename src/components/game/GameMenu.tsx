@@ -12,6 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { WorldsList } from './WorldsList';
+import { GameSettings } from './GameSettings';
 
 interface GameMenuProps {
   isOpen: boolean;
@@ -89,16 +90,14 @@ export function GameMenu({ isOpen, onClose }: GameMenuProps) {
                 <span className="text-base">Worlds</span>
               </Button>
 
-              {/* Settings - Placeholder */}
+              {/* Settings */}
               <Button
                 variant="ghost"
                 className="w-full justify-start gap-3 h-12 px-4"
                 onClick={() => setCurrentView('settings')}
-                disabled
               >
                 <Settings className="h-5 w-5" />
                 <span className="text-base">Settings</span>
-                <span className="ml-auto text-xs text-muted-foreground">Coming Soon</span>
               </Button>
 
               <Separator className="my-4" />
@@ -138,12 +137,10 @@ export function GameMenu({ isOpen, onClose }: GameMenuProps) {
           </div>
         )}
 
-        {/* Settings View - Placeholder */}
+        {/* Settings View */}
         {currentView === 'settings' && (
-          <div className="mt-6 flex-1">
-            <p className="text-sm text-muted-foreground text-center">
-              Settings coming soon...
-            </p>
+          <div className="mt-6 flex-1 overflow-auto">
+            <GameSettings />
           </div>
         )}
       </SheetContent>

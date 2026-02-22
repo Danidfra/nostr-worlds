@@ -1,6 +1,9 @@
 import { useSeoMeta } from '@unhead/react';
 import { useEffect, useState } from 'react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useWorldStates } from '@/hooks/useWorldStates';
+import { useGameContext } from '@/contexts/GameContext';
+import { getLastWorldId, getAutoOpenLastWorld } from '@/lib/storage/worldSettings';
 import LoginDialog from '@/components/auth/LoginDialog';
 import { GameTopBar } from '@/components/game/GameTopBar';
 import { GameMenu } from '@/components/game/GameMenu';
@@ -13,6 +16,8 @@ const GameView = () => {
   });
 
   const { user } = useCurrentUser();
+  const { data: worlds, isLoading: isLoadingWorlds } = useWorldStates(user?.pubkey);
+  const { currentWorldId, setCurrentWorldId } = useGameContext();
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -24,6 +29,33 @@ const GameView = () => {
       setIsLoginOpen(false);
     }
   }, [user]);
+
+  // Auto-open world logic
+  useEffect(() => {
+    // Only run after worlds are loaded and no world is currently selected
+    if (!user || isLoadingWorlds || !worlds || currentWorldId) return;
+
+    const autoOpenEnabled = getAutoOpenLastWorld();
+    const lastWorldId = getLastWorldId();
+
+    // Case 1: User has exactly 1 world → auto-open it
+    if (worlds.length === 1) {
+      setCurrentWorldId(worlds[0].id);
+      return;
+    }
+
+    // Case 2: User has multiple worlds and auto-open is enabled
+    if (worlds.length > 1 && autoOpenEnabled && lastWorldId) {
+      // Check if the last world still exists
+      const lastWorldExists = worlds.some((w) => w.id === lastWorldId);
+      if (lastWorldExists) {
+        setCurrentWorldId(lastWorldId);
+      } else {
+        // Fallback: open the first world if last world doesn't exist
+        setCurrentWorldId(worlds[0].id);
+      }
+    }
+  }, [user, worlds, isLoadingWorlds, currentWorldId, setCurrentWorldId]);
 
   const handleLoginSuccess = () => {
     setIsLoginOpen(false);

@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import { setLastWorldId } from '@/lib/storage/worldSettings';
 
 interface GameState {
   currentWorldId: string | null;
@@ -8,7 +9,16 @@ interface GameState {
 const GameContext = createContext<GameState | undefined>(undefined);
 
 export function GameProvider({ children }: { children: ReactNode }) {
-  const [currentWorldId, setCurrentWorldId] = useState<string | null>(null);
+  const [currentWorldId, setCurrentWorldIdState] = useState<string | null>(null);
+
+  // Persist world selection to localStorage whenever it changes
+  useEffect(() => {
+    setLastWorldId(currentWorldId);
+  }, [currentWorldId]);
+
+  const setCurrentWorldId = (worldId: string | null) => {
+    setCurrentWorldIdState(worldId);
+  };
 
   return (
     <GameContext.Provider value={{ currentWorldId, setCurrentWorldId }}>

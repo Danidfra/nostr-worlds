@@ -10,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Eye, EyeOff } from 'lucide-react';
+import { WorldPicker } from './WorldPicker';
 import type { PlantState } from '@/lib/nostr/types';
 
 /**
@@ -61,21 +62,9 @@ export function WorldRenderer() {
     mapState?.id
   );
 
-  // No world selected
+  // No world selected - show inline world picker
   if (!currentWorldId) {
-    return (
-      <div className="w-full h-full flex items-center justify-center">
-        <Card className="border-dashed max-w-md">
-          <CardContent className="py-12 px-8 text-center">
-            <div className="text-6xl mb-4">🌍</div>
-            <h3 className="font-semibold text-lg mb-2">No World Selected</h3>
-            <p className="text-sm text-muted-foreground">
-              Open the menu and select a world to start exploring.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <WorldPicker />;
   }
 
   // World not found
