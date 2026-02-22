@@ -262,20 +262,31 @@ When debug mode is enabled (Eye icon):
   - `--tag slot 3 2` (recommended) → `["slot", "3", "2"]`
   - `--tag slot 3:2` (alternative) → `["slot", "3:2"]`
 
+### Missing or invalid crops.json
+- The app will **not crash** if crops.json is missing or invalid
+- Plants will render as placeholder tiles (🌱 on green background)
+- **Check browser console** for crops loading status:
+  - Success: `[useRenderpack] Crops metadata loaded: N crops`
+  - Missing/Invalid: `[useRenderpack] No crops metadata (using placeholder sprites)`
+- **crops.json validation**: Must have structure `{ crops: CropMetadata[] }`
+  - If crops.json exists but has invalid structure, it will be ignored (no crash)
+
 ## Expected Renderpack Structure
 
 The default test renderpack should have this structure:
 ```
 https://raw.githubusercontent.com/Danidfra/farm-nostr-game/master/renderpacks/cozy-pixel-v1/
-├── manifest.json
+├── manifest.json (required)
 ├── meta/
 │   ├── maps/
-│   │   └── farm.v1.json
-│   └── crops.json (optional)
+│   │   └── farm.v1.json (required)
+│   └── crops.json (optional - graceful fallback if missing)
 └── assets/
     └── backgrounds/
-        └── farm-background.png
+        └── farm-background.png (required)
 ```
+
+**Note**: The app is designed to work even if crops.json is missing. Plants will simply render as placeholder sprites instead of using actual crop spritesheets.
 
 ## Next Steps
 

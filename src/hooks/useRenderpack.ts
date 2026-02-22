@@ -36,15 +36,31 @@ async function fetchLayout(renderpackUrl: string, layoutId: string): Promise<Map
  * Fetch and parse crops metadata (optional)
  * 
  * @param renderpackUrl - Base URL of the renderpack
- * @returns Crops metadata or null if not found
+ * @returns Crops metadata or null if not found/invalid
  */
 async function fetchCrops(renderpackUrl: string): Promise<CropsMetadata | null> {
   try {
     const url = `${renderpackUrl}/meta/crops.json`;
     const response = await fetch(url);
     if (!response.ok) return null;
-    return response.json();
-  } catch {
+    
+    const data = await response.json();
+    
+    // Validate structure: must have { crops: CropMetadata[] }
+    if (!data || typeof data !== 'object') {
+      console.debug('[useRenderpack] Invalid crops.json: not an object');
+      return null;
+    }
+    
+    if (!Array.isArray(data.crops)) {
+      console.debug('[useRenderpack] Invalid crops.json: crops is not an array');
+      return null;
+    }
+    
+    // Valid structure
+    return data as CropsMetadata;
+  } catch (error) {
+    console.debug('[useRenderpack] Failed to fetch crops.json:', error);
     return null;
   }
 }
@@ -99,6 +115,16 @@ export function useRenderpack(renderpackUrl?: string, layoutId?: string) {
         fetchLayout(renderpackUrl, layoutId),
         fetchCrops(renderpackUrl),
       ]);
+
+      // Debug logging for crops metadata
+      if (crops && Array.isArray(crops.crops)) {
+        console.debug(
+          `[useRenderpack] Crops metadata loaded: ${crops.crops.length} crops`,
+          crops.crops.map((c) => c.id)
+        );
+      } else {
+        console.debug('[useRenderpack] No crops metadata (using placeholder sprites)');
+      }
 
       // Resolve background image URL
       const backgroundUrl = `${renderpackUrl}/${layout.background}`;
