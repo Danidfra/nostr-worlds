@@ -1,86 +1,321 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useGameContext } from '@/contexts/GameContext';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useWorldStates } from '@/hooks/useWorldStates';
+import { useMapStates } from '@/hooks/useMapStates';
+import { usePlantStates } from '@/hooks/usePlantStates';
+import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
+import { computeGrid } from '@/lib/renderer/grid';
+import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { Eye, EyeOff } from 'lucide-react';
+import type { PlantState } from '@/lib/nostr/types';
 
 /**
- * WorldRenderer - Placeholder component for the game world
+ * WorldRenderer - Renders the game world with background, grid, and plants
  * 
- * This component renders a mock grid to demonstrate the full-screen canvas area.
- * In the future, this will be replaced with actual game rendering logic.
+ * Data flow:
+ * 1. Get current worldId from GameContext
+ * 2. Fetch WorldState for worldId
+ * 3. Fetch MapState for worldId (with entryMap preference)
+ * 4. Fetch Renderpack (manifest + layout) using resolved URLs
+ * 5. Fetch PlantStates for worldId + mapId
+ * 6. Render background, grid overlay, and plant sprites
  */
 export function WorldRenderer() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const { currentWorldId } = useGameContext();
+  const { user } = useCurrentUser();
+  const [showDebugGrid, setShowDebugGrid] = useState(false);
 
-  // Track container size for responsive rendering
-  useEffect(() => {
-    if (!containerRef.current) return;
+  // Query WorldState
+  const { data: worlds } = useWorldStates(user?.pubkey);
+  const world = worlds?.find((w) => w.id === currentWorldId);
 
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        setDimensions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        });
-      }
-    };
+  // Query MapState
+  const { data: mapState, isLoading: isMapLoading, error: mapError } = useMapStates(
+    world?.id,
+    world?.entryMap
+  );
 
-    updateDimensions();
-    
-    const resizeObserver = new ResizeObserver(updateDimensions);
-    resizeObserver.observe(containerRef.current);
+  // Resolve renderpack config
+  const renderpackConfig = world && mapState
+    ? resolveRenderpackConfig(
+        mapState.renderpackUrl,
+        mapState.layout,
+        world.renderpackUrl,
+        world.entryMap,
+      )
+    : null;
 
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, []);
+  // Query Renderpack
+  const {
+    data: renderpack,
+    isLoading: isRenderpackLoading,
+    error: renderpackError,
+  } = useRenderpack(renderpackConfig?.renderpackUrl, renderpackConfig?.layoutId);
 
-  // Calculate grid dimensions
-  const cellSize = 64; // px per cell
-  const cols = Math.ceil(dimensions.width / cellSize);
-  const rows = Math.ceil(dimensions.height / cellSize);
+  // Query PlantStates
+  const { data: plants, isLoading: isPlantsLoading } = usePlantStates(
+    world?.id,
+    mapState?.id
+  );
 
+  // No world selected
+  if (!currentWorldId) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="border-dashed max-w-md">
+          <CardContent className="py-12 px-8 text-center">
+            <div className="text-6xl mb-4">🌍</div>
+            <h3 className="font-semibold text-lg mb-2">No World Selected</h3>
+            <p className="text-sm text-muted-foreground">
+              Open the menu and select a world to start exploring.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // World not found
+  if (!world) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="border-destructive max-w-md">
+          <CardContent className="py-12 px-8 text-center">
+            <p className="text-destructive">World not found</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Loading map
+  if (isMapLoading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardContent className="py-12 px-8 text-center space-y-4">
+            <Skeleton className="h-48 w-full" />
+            <p className="text-sm text-muted-foreground">Loading map...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Map error
+  if (mapError || !mapState) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="border-destructive max-w-md">
+          <CardContent className="py-12 px-8 text-center">
+            <h3 className="font-semibold text-lg mb-2 text-destructive">Map Not Found</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              No MapState found for this world. Make sure you've published a MapState event (kind 31416).
+            </p>
+            <p className="text-xs text-muted-foreground">
+              World: {world.id}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Loading renderpack
+  if (isRenderpackLoading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardContent className="py-12 px-8 text-center space-y-4">
+            <Skeleton className="h-48 w-full" />
+            <p className="text-sm text-muted-foreground">Loading renderpack...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Renderpack error
+  if (renderpackError || !renderpack) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Card className="border-destructive max-w-md">
+          <CardContent className="py-12 px-8 text-center">
+            <h3 className="font-semibold text-lg mb-2 text-destructive">Renderpack Failed</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Failed to load renderpack. Check the renderpack_url and layout.
+            </p>
+            <p className="text-xs text-muted-foreground break-all">
+              {renderpackConfig?.renderpackUrl}/{renderpackConfig?.layoutId}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Compute grid
+  const grid = computeGrid(renderpack.layout);
+
+  // Render world
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden">
-      {/* Mock Grid Background */}
-      <div className="absolute inset-0 opacity-20">
-        <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <pattern
-              id="grid"
-              width={cellSize}
-              height={cellSize}
-              patternUnits="userSpaceOnUse"
-            >
-              <path
-                d={`M ${cellSize} 0 L 0 0 0 ${cellSize}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1"
-                className="text-gray-400 dark:text-gray-600"
-              />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#grid)" />
-        </svg>
+    <div className="w-full h-full relative overflow-auto bg-gradient-to-b from-sky-300 to-green-200 dark:from-sky-900 dark:to-green-950">
+      {/* Debug Grid Toggle */}
+      <div className="absolute top-4 right-4 z-20">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setShowDebugGrid(!showDebugGrid)}
+          className="bg-white/90 dark:bg-black/90 backdrop-blur-sm"
+        >
+          {showDebugGrid ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </Button>
       </div>
 
-      {/* Placeholder Content */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="text-center space-y-4 p-8 bg-white/50 dark:bg-black/50 backdrop-blur-sm rounded-2xl border border-white/50 dark:border-black/50">
-          <div className="text-6xl">🚜</div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-              World Renderer
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 max-w-md">
-              This is a placeholder for the game world. The actual rendering engine will be implemented here.
-            </p>
-            <div className="pt-2 text-xs text-gray-500 dark:text-gray-500 space-y-1">
-              <div>Canvas Size: {dimensions.width} × {dimensions.height}px</div>
-              <div>Grid Cells: {cols} × {rows}</div>
+      {/* Background Image */}
+      <div className="relative">
+        <img
+          src={renderpack.backgroundUrl}
+          alt={renderpack.layout.name}
+          className="block"
+          style={{ imageRendering: 'pixelated' }}
+        />
+
+        {/* Plant Area Outline (Debug) */}
+        {showDebugGrid && (
+          <div
+            className="absolute border-2 border-yellow-400 pointer-events-none"
+            style={{
+              left: grid.plantArea.x,
+              top: grid.plantArea.y,
+              width: grid.plantArea.width,
+              height: grid.plantArea.height,
+            }}
+          />
+        )}
+
+        {/* Grid Overlay (Debug) */}
+        {showDebugGrid && (
+          <svg
+            className="absolute inset-0 pointer-events-none"
+            style={{ width: '100%', height: '100%' }}
+          >
+            {grid.cells.map((cell, i) => (
+              <g key={i}>
+                <rect
+                  x={cell.x}
+                  y={cell.y}
+                  width={cell.width}
+                  height={cell.height}
+                  fill="none"
+                  stroke="rgba(255, 0, 0, 0.3)"
+                  strokeWidth="1"
+                />
+                <text
+                  x={cell.x + cell.width / 2}
+                  y={cell.y + cell.height / 2}
+                  fontSize="10"
+                  fill="rgba(255, 255, 255, 0.8)"
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                >
+                  {cell.col},{cell.row}
+                </text>
+              </g>
+            ))}
+          </svg>
+        )}
+
+        {/* Plants Layer */}
+        {isPlantsLoading ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="bg-white/90 dark:bg-black/90 backdrop-blur-sm rounded-lg px-4 py-2">
+              <p className="text-sm text-muted-foreground">Loading plants...</p>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="absolute inset-0 pointer-events-none">
+            {plants?.map((plant) => (
+              <PlantSprite
+                key={plant.id}
+                plant={plant}
+                grid={grid}
+                renderpack={renderpack}
+                showDebug={showDebugGrid}
+              />
+            ))}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Render a single plant sprite
+ */
+interface PlantSpriteProps {
+  plant: PlantState;
+  grid: ReturnType<typeof computeGrid>;
+  renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
+  showDebug: boolean;
+}
+
+function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
+  const position = grid.slotToPixel(plant.slot.x, plant.slot.y);
+  if (!position) return null; // Out of bounds
+
+  const { px, py } = position;
+  const tileSize = grid.tileSize;
+
+  // Try to load crop metadata if available
+  const cropMeta = renderpack.crops?.crops.find((c) => c.id === plant.crop);
+  const hasCropSprite = cropMeta && cropMeta.file;
+
+  return (
+    <div
+      className="absolute group pointer-events-auto cursor-pointer"
+      style={{
+        left: px,
+        top: py,
+        width: tileSize,
+        height: tileSize,
+      }}
+    >
+      {/* Render sprite if available, otherwise placeholder */}
+      {hasCropSprite && cropMeta ? (
+        <div
+          className="w-full h-full"
+          style={{
+            backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
+            backgroundPosition: `-${plant.stage * tileSize}px 0px`,
+            backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
+            backgroundRepeat: 'no-repeat',
+            imageRendering: 'pixelated',
+          }}
+        />
+      ) : (
+        // Placeholder: Simple colored square
+        <div
+          className="w-full h-full rounded border-2 border-green-600 bg-green-400 flex items-center justify-center text-xs font-bold"
+          title={`${plant.crop} (stage ${plant.stage})`}
+        >
+          🌱
+        </div>
+      )}
+
+      {/* Debug Info on Hover */}
+      {showDebug && (
+        <div className="absolute left-0 top-full mt-1 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
+          <div>Crop: {plant.crop}</div>
+          <div>Stage: {plant.stage}</div>
+          <div>Slot: {plant.slot.x},{plant.slot.y}</div>
+          <div className="truncate max-w-[200px]">ID: {plant.id}</div>
+        </div>
+      )}
     </div>
   );
 }
