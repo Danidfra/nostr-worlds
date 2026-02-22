@@ -5,12 +5,15 @@ import { useWorldStates } from '@/hooks/useWorldStates';
 import { useMapStates } from '@/hooks/useMapStates';
 import { usePlantStates } from '@/hooks/usePlantStates';
 import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
+import { usePlantingActions, type OptimisticPlant } from '@/hooks/usePlantingActions';
 import { computeGrid } from '@/lib/renderer/grid';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Eye, EyeOff } from 'lucide-react';
 import { WorldPicker } from './WorldPicker';
+import { InteractiveGridLayer } from './InteractiveGridLayer';
+import { SeedSelectDialog } from './SeedSelectDialog';
 import type { PlantState } from '@/lib/nostr/types';
 
 /**
@@ -160,6 +163,8 @@ export function WorldRenderer() {
       renderpack={renderpack}
       showDebugGrid={showDebugGrid}
       onToggleDebug={() => setShowDebugGrid(!showDebugGrid)}
+      worldId={world.id}
+      mapId={mapState.id}
     />
   );
 }
@@ -182,6 +187,8 @@ interface ResponsiveWorldViewProps {
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebugGrid: boolean;
   onToggleDebug: () => void;
+  worldId: string;
+  mapId: string;
 }
 
 function ResponsiveWorldView({
@@ -193,14 +200,21 @@ function ResponsiveWorldView({
   renderpack,
   showDebugGrid,
   onToggleDebug,
+  worldId,
+  mapId,
 }: ResponsiveWorldViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const { plantSeed } = usePlantingActions();
   
   // Track natural image size and rendered size
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  
+  // Seed selection dialog state
+  const [isSeedDialogOpen, setIsSeedDialogOpen] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<{ x: number; y: number } | null>(null);
 
   // Update natural size when image loads
   useEffect(() => {
@@ -258,6 +272,29 @@ function ResponsiveWorldView({
   const scale = naturalSize.width > 0 ? renderedSize.width / naturalSize.width : 1;
   const offsetX = (containerSize.width - renderedSize.width) / 2;
   const offsetY = (containerSize.height - renderedSize.height) / 2;
+
+  // Handle tile click - open seed selection dialog
+  const handleTileClick = (slotX: number, slotY: number) => {
+    setSelectedSlot({ x: slotX, y: slotY });
+    setIsSeedDialogOpen(true);
+  };
+
+  // Handle seed selection - plant the seed
+  const handleSelectSeed = async (cropId: string) => {
+    if (!selectedSlot) return;
+
+    try {
+      await plantSeed({
+        worldId,
+        mapId,
+        slotX: selectedSlot.x,
+        slotY: selectedSlot.y,
+        cropId,
+      });
+    } catch (error) {
+      console.error('Failed to plant seed:', error);
+    }
+  };
 
   return (
     <div
@@ -370,9 +407,33 @@ function ResponsiveWorldView({
                 ))}
               </div>
             )}
+
+            {/* Interactive Grid Layer - hover + click */}
+            {!isPlantsLoading && (
+              <InteractiveGridLayer
+                naturalWidth={naturalSize.width}
+                naturalHeight={naturalSize.height}
+                offsetX={offsetX}
+                offsetY={offsetY}
+                scale={scale}
+                grid={grid}
+                plants={plants || []}
+                onTileClick={handleTileClick}
+              />
+            )}
           </div>
         </div>
       )}
+
+      {/* Seed Selection Dialog */}
+      <SeedSelectDialog
+        isOpen={isSeedDialogOpen}
+        onClose={() => setIsSeedDialogOpen(false)}
+        crops={renderpack.crops}
+        renderpackUrl={renderpack.renderpackUrl}
+        tileSize={grid.tileSize}
+        onSelectSeed={handleSelectSeed}
+      />
     </div>
   );
 }
@@ -381,7 +442,7 @@ function ResponsiveWorldView({
  * Render a single plant sprite
  */
 interface PlantSpriteProps {
-  plant: PlantState;
+  plant: PlantState | OptimisticPlant;
   grid: ReturnType<typeof computeGrid>;
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebug: boolean;
@@ -393,6 +454,9 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
 
   const { px, py } = position;
   const tileSize = grid.tileSize;
+
+  // Check if this is an optimistic (pending) plant
+  const isPending = '__pending' in plant && plant.__pending;
 
   // Try to load crop metadata from dictionary
   // Safe check: ensure crops is an object (dictionary) before accessing
@@ -407,6 +471,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
         top: py,
         width: tileSize,
         height: tileSize,
+        opacity: isPending ? 0.6 : 1, // Reduced opacity for pending plants
       }}
     >
       {/* Render sprite if available, otherwise placeholder */}
@@ -431,6 +496,11 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
         </div>
       )}
 
+      {/* Pending indicator */}
+      {isPending && (
+        <div className="absolute top-0 right-0 w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+      )}
+
       {/* Debug Info on Hover */}
       {showDebug && (
         <div className="absolute left-0 top-full mt-1 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
@@ -438,6 +508,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
           <div>Stage: {plant.stage}</div>
           <div>Slot: {plant.slot.x},{plant.slot.y}</div>
           <div className="truncate max-w-[200px]">ID: {plant.id}</div>
+          {isPending && <div className="text-yellow-400">Status: Pending</div>}
         </div>
       )}
     </div>
