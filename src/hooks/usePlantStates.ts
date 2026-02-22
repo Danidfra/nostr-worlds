@@ -35,12 +35,25 @@ export function usePlantStates(worldId?: string, mapId?: string) {
 
       // Parse and filter by world and map
       const plants: PlantState[] = [];
+      let parsedCount = 0;
+      let filteredCount = 0;
+
       for (const event of events) {
         const plant = parsePlantState(event);
-        if (plant && plant.worldId === worldId && plant.mapId === mapId) {
-          plants.push(plant);
+        if (plant) {
+          parsedCount++;
+          if (plant.worldId === worldId && plant.mapId === mapId) {
+            plants.push(plant);
+            filteredCount++;
+          }
         }
       }
+
+      // Debug logging
+      console.debug(
+        `[usePlantStates] Fetched: ${events.length}, Parsed: ${parsedCount}, Matched: ${filteredCount}`,
+        { worldId, mapId }
+      );
 
       return plants;
     },

@@ -94,18 +94,45 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
   const v = getTag(event, 'v');
   const worldId = getTag(event, 'world');
   const mapId = getTag(event, 'map');
-  const slotX = getTagValue(event, 'slot', 1);
-  const slotY = getTagValue(event, 'slot', 2);
   const crop = getTag(event, 'crop');
   const stageStr = getTag(event, 'stage');
+
+  // Parse slot tag - supports both formats:
+  // Format 1: ["slot", "3", "2"] - separate x,y values
+  // Format 2: ["slot", "3:2"] - colon-separated string
+  const slotTag = event.tags.find(([name]) => name === 'slot');
+  if (!slotTag) return null;
+
+  let slotX: string | undefined;
+  let slotY: string | undefined;
+
+  if (slotTag[2] !== undefined) {
+    // Format 1: ["slot", "3", "2"]
+    slotX = slotTag[1];
+    slotY = slotTag[2];
+  } else if (slotTag[1] && slotTag[1].includes(':')) {
+    // Format 2: ["slot", "3:2"]
+    const parts = slotTag[1].split(':');
+    if (parts.length === 2) {
+      slotX = parts[0];
+      slotY = parts[1];
+    }
+  }
 
   // Validate required tags
   if (!d || !v || !worldId || !mapId || !slotX || !slotY || !crop || stageStr === undefined) {
     return null;
   }
 
+  // Parse and validate slot coordinates
+  const x = parseInt(slotX, 10);
+  const y = parseInt(slotY, 10);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
   const stage = parseInt(stageStr, 10);
-  if (isNaN(stage)) return null;
+  if (!Number.isFinite(stage)) return null;
 
   // Optional timing tags
   const plantedAtStr = getTag(event, 'planted_at');
@@ -122,8 +149,8 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
     worldId,
     mapId,
     slot: {
-      x: parseInt(slotX, 10),
-      y: parseInt(slotY, 10),
+      x,
+      y,
     },
     crop,
     stage,

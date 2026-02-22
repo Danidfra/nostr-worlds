@@ -117,7 +117,10 @@ nak event -k 31417 \
 ```
 
 **Note**: 
-- The `slot` tag has two values: X (column) and Y (row)
+- The `slot` tag supports two formats:
+  - **Format 1** (recommended): `--tag slot 3 2` → creates `["slot", "3", "2"]`
+  - **Format 2** (alternative): `--tag slot 3:2` → creates `["slot", "3:2"]`
+  - Both formats are parsed correctly (X = column, Y = row)
 - The `stage` is a 0-based index (0 = seed, 1 = sprout, 2 = growing, 3 = ready, etc.)
 - The discovery tag (`t`) should match the world ID
 
@@ -251,6 +254,13 @@ When debug mode is enabled (Eye icon):
 - Ensure PlantState events are published with the correct world and map IDs
 - Check that slot coordinates are within the grid bounds (0-based)
 - Verify the discovery tag `t` matches the world ID
+- **Check browser console** for debug logs:
+  - Look for `[usePlantStates] Fetched: X, Parsed: Y, Matched: Z`
+  - If `Fetched > 0` but `Parsed = 0`: Check slot tag format (must be `["slot", "3", "2"]` or `["slot", "3:2"]`)
+  - If `Parsed > 0` but `Matched = 0`: Verify world and map IDs match exactly
+- **Slot tag format**: The parser supports both formats:
+  - `--tag slot 3 2` (recommended) → `["slot", "3", "2"]`
+  - `--tag slot 3:2` (alternative) → `["slot", "3:2"]`
 
 ## Expected Renderpack Structure
 
