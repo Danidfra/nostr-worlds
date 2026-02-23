@@ -87,10 +87,11 @@ export function SeedSelectDialog({
 }
 
 /**
- * CropPreview - Renders a scaled crop sprite preview
+ * CropPreview - Renders a crop sprite preview showing the harvest frame
  * 
- * Shows the harvest/ready frame (not frame 0) with proper scaling
- * to fit in a 64x64 preview box while maintaining pixelated rendering.
+ * Scales the spritesheet itself (not the element) to fit 64x64,
+ * then positions to show the correct frame. No transform: scale() is used.
+ * This prevents clipping and ensures the entire frame is visible.
  */
 interface CropPreviewProps {
   file: string;
@@ -104,35 +105,29 @@ function CropPreview({ file, stages, harvestStage, renderpackUrl, tileSize }: Cr
   // Determine which frame to show (harvest frame or last frame)
   const frameIndex = harvestStage ?? (stages - 1);
   
-  // Calculate background position for the correct frame
-  const backgroundPositionX = -(frameIndex * tileSize);
-  
   // Preview box size (64x64)
   const previewSize = 64;
   
-  // Scale factor to fit tileSize into preview box
-  const scale = previewSize / tileSize;
+  // Treat preview size as the scaled tile size
+  const scaledTileSize = previewSize;
+  
+  // Scale the entire spritesheet to match the preview size
+  const scaledBackgroundWidth = stages * scaledTileSize;
+  const scaledBackgroundHeight = scaledTileSize;
+  
+  // Calculate background position using the scaled tile size
+  const backgroundPositionX = -(frameIndex * scaledTileSize);
   
   return (
     <div
-      className="w-16 h-16 overflow-hidden flex items-center justify-center"
+      className="w-16 h-16"
       style={{
+        backgroundImage: `url(${renderpackUrl}/${file})`,
+        backgroundPosition: `${backgroundPositionX}px 0px`,
+        backgroundSize: `${scaledBackgroundWidth}px ${scaledBackgroundHeight}px`,
+        backgroundRepeat: 'no-repeat',
         imageRendering: 'pixelated',
       }}
-    >
-      <div
-        style={{
-          width: tileSize,
-          height: tileSize,
-          backgroundImage: `url(${renderpackUrl}/${file})`,
-          backgroundPosition: `${backgroundPositionX}px 0px`,
-          backgroundSize: `${stages * tileSize}px ${tileSize}px`,
-          backgroundRepeat: 'no-repeat',
-          imageRendering: 'pixelated',
-          transform: `scale(${scale})`,
-          transformOrigin: 'center center',
-        }}
-      />
-    </div>
+    />
   );
 }
