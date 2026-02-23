@@ -232,6 +232,9 @@ function ResponsiveWorldView({
   // Seed selection dialog state
   const [isSeedDialogOpen, setIsSeedDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ x: number; y: number } | null>(null);
+  
+  // Track hovered slot for visual feedback on plants
+  const [hoveredSlotCoords, setHoveredSlotCoords] = useState<{ x: number; y: number } | null>(null);
 
   // Update natural size when image loads
   useEffect(() => {
@@ -470,16 +473,23 @@ function ResponsiveWorldView({
               </div>
             ) : (
               <div className="absolute inset-0">
-                {slots?.map((slot) => (
-                  <SlotSprite
-                    key={slot.id}
-                    slot={slot}
-                    grid={grid}
-                    renderpack={renderpack}
-                    showDebug={showDebugGrid}
-                    nowSec={nowSec}
-                  />
-                ))}
+                {slots?.map((slot) => {
+                  const isHovered = hoveredSlotCoords 
+                    ? slot.slot.x === hoveredSlotCoords.x && slot.slot.y === hoveredSlotCoords.y
+                    : false;
+                  
+                  return (
+                    <SlotSprite
+                      key={slot.id}
+                      slot={slot}
+                      grid={grid}
+                      renderpack={renderpack}
+                      showDebug={showDebugGrid}
+                      nowSec={nowSec}
+                      isHovered={isHovered}
+                    />
+                  );
+                })}
               </div>
             )}
 
@@ -495,6 +505,13 @@ function ResponsiveWorldView({
                 slots={slots || []}
                 onTileClick={handleTileClick}
                 onPlantClick={handlePlantClick}
+                onHoverChange={(x, y) => {
+                  if (x !== null && y !== null) {
+                    setHoveredSlotCoords({ x, y });
+                  } else {
+                    setHoveredSlotCoords(null);
+                  }
+                }}
               />
             )}
           </div>
@@ -541,9 +558,10 @@ interface SlotSpriteProps {
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebug: boolean;
   nowSec: number;
+  isHovered: boolean;
 }
 
-function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpriteProps) {
+function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: SlotSpriteProps) {
   const position = grid.slotToPixel(slot.slot.x, slot.slot.y);
   if (!position) return null; // Out of bounds
 
@@ -598,7 +616,7 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
 
   return (
     <div
-      className="absolute group pointer-events-none"
+      className="absolute pointer-events-none"
       style={{
         left: px,
         top: py,
@@ -610,16 +628,15 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
       {/* Render sprite if available, otherwise placeholder */}
       {hasCropSprite && cropMeta ? (
         <div
-          className={`w-full h-full transition-transform duration-200 ${
-            ready ? 'group-hover:scale-105' : ''
-          }`}
+          className="w-full h-full transition-transform duration-200"
           style={{
             backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
             backgroundPosition: `-${computedStage * tileSize}px 0px`,
             backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
             backgroundRepeat: 'no-repeat',
             imageRendering: 'pixelated',
-            filter: ready ? 'brightness(1.1)' : undefined,
+            filter: ready && isHovered ? 'brightness(1.1)' : undefined,
+            transform: ready && isHovered ? 'scale(1.05)' : undefined,
           }}
         />
       ) : (
@@ -633,9 +650,9 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
       )}
 
       {/* Ready to harvest glow effect */}
-      {ready && hasCropSprite && (
+      {ready && hasCropSprite && isHovered && (
         <div
-          className="absolute inset-0 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+          className="absolute inset-0 rounded-sm transition-opacity duration-200"
           style={{
             boxShadow: '0 0 8px 2px rgba(255, 215, 0, 0.6)',
             pointerEvents: 'none',
@@ -649,15 +666,15 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
       )}
 
       {/* User-facing tooltip: "Not ready" or "Ready in Xs" */}
-      {!showDebug && !ready && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
-        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none">
+      {!showDebug && !ready && isHovered && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none">
           {formatTimeRemaining(secondsUntilNext)}
         </div>
       )}
       
       {/* Fallback tooltip when no crop metadata */}
-      {!showDebug && !ready && !cropMeta && (
-        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none">
+      {!showDebug && !ready && isHovered && !cropMeta && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none">
           Not ready
         </div>
       )}

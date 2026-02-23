@@ -14,6 +14,7 @@ interface InteractiveGridLayerProps {
   slots: (SlotState | OptimisticSlot)[];
   onTileClick: (slotX: number, slotY: number) => void;
   onPlantClick?: (slot: SlotState | OptimisticSlot) => void;
+  onHoverChange?: (slotX: number | null, slotY: number | null) => void;
 }
 
 /**
@@ -35,9 +36,11 @@ export function InteractiveGridLayer({
   slots,
   onTileClick,
   onPlantClick,
+  onHoverChange,
 }: InteractiveGridLayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{ x: number; y: number } | null>(null);
+  const [hoveredPlantSlot, setHoveredPlantSlot] = useState<{ x: number; y: number } | null>(null);
 
   // Handle mouse move
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -53,17 +56,39 @@ export function InteractiveGridLayer({
       grid
     );
 
-    // Hover only if slot is plantable (empty or doesn't exist)
-    if (slot && isSlotPlantable(slot.x, slot.y, slots)) {
-      setHoveredSlot(slot);
-    } else {
+    if (!slot) {
       setHoveredSlot(null);
+      setHoveredPlantSlot(null);
+      onHoverChange?.(null, null);
+      return;
+    }
+
+    // Notify parent of hover change (for all slots)
+    onHoverChange?.(slot.x, slot.y);
+
+    // Check if this slot has a plant
+    const slotState = getSlotAt(slot.x, slot.y, slots);
+    
+    if (slotState?.type === 'plant') {
+      // Hovering a plant
+      setHoveredPlantSlot(slot);
+      setHoveredSlot(null);
+    } else if (isSlotPlantable(slot.x, slot.y, slots)) {
+      // Hovering plantable slot
+      setHoveredSlot(slot);
+      setHoveredPlantSlot(null);
+    } else {
+      // Neither plantable nor plant
+      setHoveredSlot(null);
+      setHoveredPlantSlot(null);
     }
   };
 
   // Handle mouse leave
   const handleMouseLeave = () => {
     setHoveredSlot(null);
+    setHoveredPlantSlot(null);
+    onHoverChange?.(null, null);
   };
 
   // Handle click
