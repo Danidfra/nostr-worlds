@@ -160,11 +160,13 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
   const crop = getTag(event, 'crop');
   const stageStr = getTag(event, 'stage');
   const plantedAtStr = getTag(event, 'planted_at');
+  const wateredAtStr = getTag(event, 'watered_at');
   const readyAtStr = getTag(event, 'ready_at');
+  const expiresAtStr = getTag(event, 'expires_at');
+  const status = getTag(event, 'status');
   const harvestCountStr = getTag(event, 'harvest_count');
   const harvestMaxStr = getTag(event, 'harvest_max');
   const regrowAtStr = getTag(event, 'regrow_at');
-  const expiresAtStr = getTag(event, 'expires_at');
 
   // For plant slots, crop is required
   if (!crop) {
@@ -185,11 +187,13 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     crop,
     stage,
     plantedAt,
+    wateredAt: wateredAtStr ? parseInt(wateredAtStr, 10) : undefined,
     readyAt: readyAtStr ? parseInt(readyAtStr, 10) : undefined,
+    expiresAt: expiresAtStr ? parseInt(expiresAtStr, 10) : undefined,
+    status: status as 'healthy' | 'rotten' | undefined,
     harvestCount: harvestCountStr ? parseInt(harvestCountStr, 10) : undefined,
     harvestMax: harvestMaxStr ? parseInt(harvestMaxStr, 10) : undefined,
     regrowAt: regrowAtStr ? parseInt(regrowAtStr, 10) : undefined,
-    expiresAt: expiresAtStr ? parseInt(expiresAtStr, 10) : undefined,
   };
 }
 
@@ -283,13 +287,22 @@ export function validateSlotAction(event: NostrEvent): boolean {
 /**
  * Get the current revision of a SlotState
  * 
- * For MVP implementation:
- * - If SlotState.type === 'plant' → rev = plantedAt
- * - Else → rev = SlotState.event.created_at
+ * Revision rules (for concurrency control):
+ * - For plant slots: Use latest of (wateredAt, plantedAt, created_at)
+ * - For other slots: Use event.created_at
+ * 
+ * This ensures any state change (plant, water, harvest, clear) updates the revision.
  */
 export function getSlotRevision(slotState: SlotState): number {
-  if (slotState.type === 'plant' && slotState.plantedAt) {
-    return slotState.plantedAt;
+  if (slotState.type === 'plant') {
+    // Use the most recent timestamp as revision
+    const timestamps = [
+      slotState.wateredAt,
+      slotState.plantedAt,
+      slotState.event.created_at,
+    ].filter((t): t is number => t !== undefined);
+    
+    return Math.max(...timestamps);
   }
   return slotState.event.created_at;
 }

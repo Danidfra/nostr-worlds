@@ -12,7 +12,7 @@ import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
-import { computeGrowthStage, computeSecondsUntilNextStage, isHarvestable } from '@/lib/game/growth';
+import { computeGrowthStage, computeGrowthStageWithWater, computeSecondsUntilNextStage, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -218,7 +218,7 @@ function ResponsiveWorldView({
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const queryClient = useQueryClient();
-  const { plantSlot, harvestSlot } = useSlotActions();
+  const { plantSlot, harvestSlot, waterSlot, clearSlot } = useSlotActions();
   
   // Enable host action processor (processes SlotAction events in background)
   // Use the same relay for reading actions and publishing SlotState
@@ -299,19 +299,19 @@ function ResponsiveWorldView({
     setIsSeedDialogOpen(true);
   };
 
-  // Handle plant click - harvest the plant (only if ready)
+  // Handle plant click - water/harvest/clear based on plant state
   const handlePlantClick = async (slot: SlotState | OptimisticSlot) => {
-    // Don't allow harvesting pending slots
+    // Don't allow interaction with pending slots
     if ('__pending' in slot && slot.__pending) {
       return;
     }
 
-    // Only harvest plant slots
+    // Only interact with plant slots
     if (slot.type !== 'plant' || !slot.crop) {
       return;
     }
 
-    // Check if plant is ready to harvest
+    // Get crop metadata
     const cropMeta = renderpack.crops?.crops?.[slot.crop];
     if (!cropMeta) {
       console.warn('[handlePlantClick] No crop metadata found for', slot.crop);
@@ -319,20 +319,67 @@ function ResponsiveWorldView({
     }
 
     const plantedAt = slot.plantedAt ?? slot.event.created_at;
-    const ready = isHarvestable(plantedAt, nowSec, cropMeta);
+    
+    // Check if plant is rotten
+    const plantIsRotten = isRotten(slot, nowSec);
+    if (plantIsRotten) {
+      console.log('[handlePlantClick] Clearing rotten plant', {
+        crop: slot.crop,
+        slot: slot.slot,
+      });
+      
+      try {
+        await clearSlot({
+          worldId,
+          mapId,
+          slotX: slot.slot.x,
+          slotY: slot.slot.y,
+          currentSlotState: slot,
+        });
+      } catch (error) {
+        console.error('Failed to clear:', error);
+      }
+      return;
+    }
 
+    // Check if plant needs water
+    const plantsNeedsWater = needsWater(slot.wateredAt);
+    if (plantsNeedsWater) {
+      console.log('[handlePlantClick] Watering plant', {
+        crop: slot.crop,
+        slot: slot.slot,
+      });
+      
+      try {
+        await waterSlot({
+          worldId,
+          mapId,
+          slotX: slot.slot.x,
+          slotY: slot.slot.y,
+          currentSlotState: slot,
+        });
+      } catch (error) {
+        console.error('Failed to water:', error);
+      }
+      return;
+    }
+
+    // Check if plant is ready to harvest
+    const ready = isHarvestableSlot(slot, nowSec, cropMeta);
+    
     if (!ready) {
       console.log('[handlePlantClick] Plant not ready to harvest', {
         crop: slot.crop,
         plantedAt,
+        wateredAt: slot.wateredAt,
         nowSec,
-        currentStage: computeGrowthStage(plantedAt, nowSec, cropMeta),
+        currentStage: computeGrowthStageWithWater(plantedAt, slot.wateredAt, nowSec, cropMeta),
         maxStage: cropMeta.stages - 1,
       });
-      // TODO: Show "not ready" feedback to user
       return;
     }
 
+    // Harvest ready plant
     console.log('[handlePlantClick] Harvesting ready plant', {
       crop: slot.crop,
       slot: slot.slot,
@@ -599,11 +646,10 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     }
   }
 
-  // Compute current growth stage based on time elapsed
-  // ALWAYS use computeGrowthStage when crop metadata is available
+  // Compute current growth stage based on time elapsed WITH watering
   // slot.stage is LEGACY data and NEVER used for rendering
   const computedStage = cropMeta
-    ? computeGrowthStage(plantedAt, nowSec, cropMeta)
+    ? computeGrowthStageWithWater(plantedAt, slot.wateredAt, nowSec, cropMeta)
     : 0; // Fallback to seed stage if no metadata
 
   // Compute seconds until next stage (for user tooltip)
@@ -611,8 +657,14 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
     : null;
 
+  // Check if plant needs watering
+  const plantsNeedsWater = needsWater(slot.wateredAt);
+
+  // Check if plant is rotten/expired
+  const plantIsRotten = isRotten(slot, nowSec);
+
   // Determine if plant is ready to harvest
-  const ready = cropMeta ? isHarvestable(plantedAt, nowSec, cropMeta) : false;
+  const ready = cropMeta && !plantIsRotten ? isHarvestableSlot(slot, nowSec, cropMeta) : false;
 
   return (
     <div
@@ -627,18 +679,27 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     >
       {/* Render sprite if available, otherwise placeholder */}
       {hasCropSprite && cropMeta ? (
-        <div
-          className="w-full h-full transition-transform duration-200"
-          style={{
-            backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
-            backgroundPosition: `-${computedStage * tileSize}px 0px`,
-            backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
-            backgroundRepeat: 'no-repeat',
-            imageRendering: 'pixelated',
-            filter: ready && isHovered ? 'brightness(1.1)' : undefined,
-            transform: ready && isHovered ? 'scale(1.05)' : undefined,
-          }}
-        />
+        <>
+          <div
+            className="w-full h-full transition-transform duration-200"
+            style={{
+              backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
+              backgroundPosition: `-${computedStage * tileSize}px 0px`,
+              backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
+              backgroundRepeat: 'no-repeat',
+              imageRendering: 'pixelated',
+              filter: ready && isHovered ? 'brightness(1.1)' : plantIsRotten ? 'grayscale(1) brightness(0.7)' : undefined,
+              transform: ready && isHovered ? 'scale(1.05)' : undefined,
+            }}
+          />
+          
+          {/* Rotten overlay tint */}
+          {plantIsRotten && (
+            <div
+              className="absolute inset-0 bg-red-900/40 rounded-sm pointer-events-none"
+            />
+          )}
+        </>
       ) : (
         // Placeholder: Simple colored square
         <div
@@ -650,7 +711,7 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
       )}
 
       {/* Ready to harvest glow effect */}
-      {ready && hasCropSprite && isHovered && (
+      {ready && hasCropSprite && isHovered && !plantIsRotten && (
         <div
           className="absolute inset-0 rounded-sm transition-opacity duration-200"
           style={{
@@ -665,15 +726,29 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
         <div className="absolute top-0 right-0 w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
       )}
 
-      {/* User-facing tooltip: "Not ready" or "Ready in Xs" */}
-      {!showDebug && !ready && isHovered && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
+      {/* Tooltip: Rotten plant */}
+      {!showDebug && isHovered && plantIsRotten && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-red-900/95 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none border border-red-700">
+          Rotten — Click to clear
+        </div>
+      )}
+
+      {/* Tooltip: Needs water */}
+      {!showDebug && isHovered && !plantIsRotten && plantsNeedsWater && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-blue-900/95 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none border border-blue-700">
+          Needs water
+        </div>
+      )}
+      
+      {/* Tooltip: Not ready (has water, still growing) */}
+      {!showDebug && !ready && !plantIsRotten && !plantsNeedsWater && isHovered && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
         <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none">
           {formatTimeRemaining(secondsUntilNext)}
         </div>
       )}
       
       {/* Fallback tooltip when no crop metadata */}
-      {!showDebug && !ready && isHovered && !cropMeta && (
+      {!showDebug && !ready && !plantIsRotten && isHovered && !cropMeta && (
         <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none">
           Not ready
         </div>

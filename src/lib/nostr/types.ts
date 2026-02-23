@@ -87,22 +87,26 @@ export interface SlotState {
   stage?: number;
   /** Planting timestamp - Used for time-based growth computation */
   plantedAt?: number;
-  /** Optional: Ready-to-harvest timestamp */
+  /** Last watering timestamp - Required for stage progression */
+  wateredAt?: number;
+  /** Ready-to-harvest timestamp - Set when plant reaches final stage */
   readyAt?: number;
+  /** Expiration timestamp - When plant becomes rotten (readyAt + grace period) */
+  expiresAt?: number;
   /** Optional: Harvest count */
   harvestCount?: number;
   /** Optional: Maximum harvests */
   harvestMax?: number;
   /** Optional: Regrowth timestamp */
   regrowAt?: number;
-  /** Optional: Expiration timestamp */
-  expiresAt?: number;
   
   // Empty slot fields (only present when type === 'empty')
-  /** Slot status for empty slots */
-  status?: 'empty';
   /** Last harvest timestamp for empty slots */
   lastHarvestedAt?: number;
+  
+  // Status field (applicable to both plant and empty slots)
+  /** Slot status - empty for empty slots, healthy/rotten for plants */
+  status?: 'empty' | 'healthy' | 'rotten' | string;
 }
 
 /**
@@ -203,8 +207,8 @@ export interface SlotAction {
   };
   /** Slot address (d tag format used by SlotState) */
   slotD: string;
-  /** Action type (harvest, plant, water, etc.) */
-  action: 'harvest' | 'plant' | string;
+  /** Action type (harvest, plant, water, clear) */
+  action: 'harvest' | 'plant' | 'water' | 'clear' | string;
   /** Expected slot revision (for concurrency control) */
   expectedRev: number;
   /** Client-side deduplication ID (UUID) */

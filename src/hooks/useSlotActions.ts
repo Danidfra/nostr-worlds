@@ -22,6 +22,22 @@ interface PlantSlotParams {
   currentSlotState?: SlotState;
 }
 
+interface WaterSlotParams {
+  worldId: string;
+  mapId: string;
+  slotX: number;
+  slotY: number;
+  currentSlotState: SlotState;
+}
+
+interface ClearSlotParams {
+  worldId: string;
+  mapId: string;
+  slotX: number;
+  slotY: number;
+  currentSlotState: SlotState;
+}
+
 /**
  * Generate a UUID v4 for client_nonce
  */
@@ -186,10 +202,151 @@ export function useSlotActions() {
     },
   });
 
+  /**
+   * Water a planted slot
+   * 
+   * Publishes a SlotAction (kind 14159) with action="water"
+   */
+  const waterSlot = useMutation({
+    mutationFn: async (params: WaterSlotParams) => {
+      if (!user) {
+        throw new Error('User must be logged in to water');
+      }
+
+      const { worldId, mapId, slotX, slotY, currentSlotState } = params;
+
+      // Validate slot state
+      if (currentSlotState.type !== 'plant') {
+        throw new Error('Cannot water: slot is not a plant');
+      }
+
+      // Extract map suffix
+      const mapSuffix = mapId.split(':').pop() || mapId;
+      const slotD = `slot:${worldId}:${mapSuffix}:${slotX}:${slotY}`;
+
+      // Get current revision
+      const expectedRev = getSlotRevision(currentSlotState);
+      const clientNonce = generateUUID();
+
+      // Publish SlotAction event (Kind 14159)
+      await publishEvent({
+        kind: 14159,
+        content: '',
+        tags: [
+          ['v', '1'],
+          ['world', worldId],
+          ['map', mapId],
+          ['slot', slotX.toString(), slotY.toString()],
+          ['slot_d', slotD],
+          ['action', 'water'],
+          ['expected_rev', expectedRev.toString()],
+          ['client_nonce', clientNonce],
+          ['t', worldId],
+        ],
+      });
+
+      console.log('[SlotAction] Published water action', {
+        slotD,
+        expectedRev,
+        clientNonce,
+      });
+
+      return { slotD, worldId, mapId, slotX, slotY, clientNonce };
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to water',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Watered!',
+        description: 'Your plant is growing...',
+      });
+    },
+  });
+
+  /**
+   * Clear a rotten/expired plant
+   * 
+   * Publishes a SlotAction (kind 14159) with action="clear"
+   */
+  const clearSlot = useMutation({
+    mutationFn: async (params: ClearSlotParams) => {
+      if (!user) {
+        throw new Error('User must be logged in to clear');
+      }
+
+      const { worldId, mapId, slotX, slotY, currentSlotState } = params;
+
+      // Validate slot state
+      if (currentSlotState.type !== 'plant') {
+        throw new Error('Cannot clear: slot is not a plant');
+      }
+
+      if (currentSlotState.status !== 'rotten') {
+        throw new Error('Cannot clear: plant is not rotten');
+      }
+
+      // Extract map suffix
+      const mapSuffix = mapId.split(':').pop() || mapId;
+      const slotD = `slot:${worldId}:${mapSuffix}:${slotX}:${slotY}`;
+
+      // Get current revision
+      const expectedRev = getSlotRevision(currentSlotState);
+      const clientNonce = generateUUID();
+
+      // Publish SlotAction event (Kind 14159)
+      await publishEvent({
+        kind: 14159,
+        content: '',
+        tags: [
+          ['v', '1'],
+          ['world', worldId],
+          ['map', mapId],
+          ['slot', slotX.toString(), slotY.toString()],
+          ['slot_d', slotD],
+          ['action', 'clear'],
+          ['expected_rev', expectedRev.toString()],
+          ['client_nonce', clientNonce],
+          ['t', worldId],
+        ],
+      });
+
+      console.log('[SlotAction] Published clear action', {
+        slotD,
+        expectedRev,
+        clientNonce,
+      });
+
+      return { slotD, worldId, mapId, slotX, slotY, clientNonce };
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to clear',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Clearing rotten plant...',
+        description: 'Waiting for host to process...',
+      });
+    },
+  });
+
   return {
     harvestSlot: harvestSlot.mutateAsync,
     isHarvesting: harvestSlot.isPending,
     plantSlot: plantSlot.mutateAsync,
     isPlanting: plantSlot.isPending,
+    waterSlot: waterSlot.mutateAsync,
+    isWatering: waterSlot.isPending,
+    clearSlot: clearSlot.mutateAsync,
+    isClearing: clearSlot.isPending,
   };
 }
+

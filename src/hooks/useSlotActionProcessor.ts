@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
-import type { SlotState, SlotAction } from '@/lib/nostr/types';
+import type { SlotState, SlotAction, CropMetadata } from '@/lib/nostr/types';
+import { EXPIRATION_GRACE_PERIOD_SEC, computeGrowthStageWithWater, isRotten } from '@/lib/game/growth';
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -294,6 +295,72 @@ function validateAction(
     return { valid: true };
   }
 
+  if (action.action === 'water') {
+    // Water validation
+    if (!currentSlot) {
+      return {
+        valid: false,
+        reason: 'SlotState not found on relay',
+        canRetry: true,
+      };
+    }
+
+    if (currentSlot.type !== 'plant') {
+      return { valid: false, reason: 'Slot is not a plant' };
+    }
+
+    if (!currentSlot.crop) {
+      return { valid: false, reason: 'Slot has no crop' };
+    }
+
+    // Cannot water rotten plants
+    if (currentSlot.status === 'rotten') {
+      return { valid: false, reason: 'Cannot water rotten plant' };
+    }
+
+    // Validate expected_rev
+    const currentRev = getSlotRevision(currentSlot);
+    if (action.expectedRev !== currentRev) {
+      return {
+        valid: false,
+        reason: `Revision mismatch: expected ${action.expectedRev}, got ${currentRev}`,
+      };
+    }
+
+    return { valid: true };
+  }
+
+  if (action.action === 'clear') {
+    // Clear validation
+    if (!currentSlot) {
+      return {
+        valid: false,
+        reason: 'SlotState not found on relay',
+        canRetry: true,
+      };
+    }
+
+    if (currentSlot.type !== 'plant') {
+      return { valid: false, reason: 'Slot is not a plant' };
+    }
+
+    // Can only clear rotten plants
+    if (currentSlot.status !== 'rotten') {
+      return { valid: false, reason: 'Can only clear rotten plants' };
+    }
+
+    // Validate expected_rev
+    const currentRev = getSlotRevision(currentSlot);
+    if (action.expectedRev !== currentRev) {
+      return {
+        valid: false,
+        reason: `Revision mismatch: expected ${action.expectedRev}, got ${currentRev}`,
+      };
+    }
+
+    return { valid: true };
+  }
+
   return { valid: false, reason: `Unknown action type: ${action.action}` };
 }
 
@@ -375,6 +442,77 @@ async function applyAction(
     console.log('[SlotActionProcessor] Published plant SlotState', {
       slotD: action.slotD,
       crop: action.crop,
+      relayUrl,
+      eventId: event.id,
+    });
+  } else if (action.action === 'water') {
+    // Water: Update wateredAt timestamp
+    if (!currentSlot || currentSlot.type !== 'plant' || !currentSlot.crop) {
+      throw new Error('Cannot water non-plant slot');
+    }
+
+    // Build tags for watered plant
+    const tags: string[][] = [
+      ['d', action.slotD],
+      ['v', '1'],
+      ['world', action.worldId],
+      ['map', action.mapId],
+      ['slot', action.slot.x.toString(), action.slot.y.toString()],
+      ['type', 'plant'],
+      ['crop', currentSlot.crop],
+      ['stage', '0'], // Legacy
+      ['planted_at', currentSlot.plantedAt?.toString() ?? now.toString()],
+      ['watered_at', now.toString()], // Update water timestamp
+      ['status', currentSlot.status ?? 'healthy'],
+      ['t', action.worldId],
+    ];
+
+    // Preserve existing ready_at and expires_at if present
+    if (currentSlot.readyAt) {
+      tags.push(['ready_at', currentSlot.readyAt.toString()]);
+    }
+    if (currentSlot.expiresAt) {
+      tags.push(['expires_at', currentSlot.expiresAt.toString()]);
+    }
+
+    const event = await user.signer.signEvent({
+      kind: 31417,
+      content: '',
+      tags,
+      created_at: now,
+    });
+
+    await relay.event(event);
+
+    console.log('[SlotActionProcessor] Published watered SlotState', {
+      slotD: action.slotD,
+      wateredAt: now,
+      relayUrl,
+      eventId: event.id,
+    });
+  } else if (action.action === 'clear') {
+    // Clear: Convert rotten plant to empty slot
+    const event = await user.signer.signEvent({
+      kind: 31417,
+      content: '',
+      tags: [
+        ['d', action.slotD],
+        ['v', '1'],
+        ['world', action.worldId],
+        ['map', action.mapId],
+        ['slot', action.slot.x.toString(), action.slot.y.toString()],
+        ['type', 'empty'],
+        ['status', 'empty'],
+        ['last_harvested_at', now.toString()],
+        ['t', action.worldId],
+      ],
+      created_at: now,
+    });
+
+    await relay.event(event);
+
+    console.log('[SlotActionProcessor] Published empty SlotState after clear', {
+      slotD: action.slotD,
       relayUrl,
       eventId: event.id,
     });
