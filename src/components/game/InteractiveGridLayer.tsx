@@ -1,18 +1,19 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { clientToSlot } from '@/lib/renderer/coordinates';
 import type { ComputedGrid } from '@/lib/renderer/grid';
 import type { SlotState } from '@/lib/nostr/types';
 import type { OptimisticSlot } from '@/hooks/usePlantingActions';
 
 interface InteractiveGridLayerProps {
-  naturalWidth: number;
-  naturalHeight: number;
+  _naturalWidth: number;
+  _naturalHeight: number;
   offsetX: number;
   offsetY: number;
   scale: number;
   grid: ComputedGrid;
   slots: (SlotState | OptimisticSlot)[];
   onTileClick: (slotX: number, slotY: number) => void;
+  onPlantClick?: (slot: SlotState | OptimisticSlot) => void;
 }
 
 /**
@@ -21,17 +22,19 @@ interface InteractiveGridLayerProps {
  * Provides:
  * - Hover highlighting on empty tiles
  * - Click detection for planting
+ * - Click detection for harvesting plants
  * - Coordinate conversion from mouse to grid slot
  */
 export function InteractiveGridLayer({
-  naturalWidth,
-  naturalHeight,
+  _naturalWidth,
+  _naturalHeight,
   offsetX,
   offsetY,
   scale,
   grid,
   slots,
   onTileClick,
+  onPlantClick,
 }: InteractiveGridLayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{ x: number; y: number } | null>(null);
@@ -77,8 +80,18 @@ export function InteractiveGridLayer({
       grid
     );
 
-    // Only allow clicking empty slots
-    if (slot && !isSlotOccupied(slot.x, slot.y, slots)) {
+    if (!slot) return;
+
+    // Check if slot is occupied
+    const occupiedSlot = getSlotAt(slot.x, slot.y, slots);
+
+    if (occupiedSlot) {
+      // Click on plant - trigger harvest callback if available
+      if (onPlantClick) {
+        onPlantClick(occupiedSlot);
+      }
+    } else {
+      // Click on empty slot - trigger plant callback
       onTileClick(slot.x, slot.y);
     }
   };
@@ -127,4 +140,15 @@ function isSlotOccupied(
   slots: (SlotState | OptimisticSlot)[]
 ): boolean {
   return slots.some((slot) => slot.slot.x === slotX && slot.slot.y === slotY);
+}
+
+/**
+ * Get slot at specific coordinates
+ */
+function getSlotAt(
+  slotX: number,
+  slotY: number,
+  slots: (SlotState | OptimisticSlot)[]
+): SlotState | OptimisticSlot | undefined {
+  return slots.find((slot) => slot.slot.x === slotX && slot.slot.y === slotY);
 }

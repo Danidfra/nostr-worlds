@@ -50,6 +50,7 @@ export function usePlantingActions() {
           ['world', worldId],
           ['map', mapId],
           ['slot', slotX.toString(), slotY.toString()],
+          ['type', 'plant'],
           ['crop', cropId],
           ['stage', '0'],
           ['planted_at', now.toString()],
@@ -93,6 +94,7 @@ export function usePlantingActions() {
         worldId,
         mapId,
         slot: { x: slotX, y: slotY },
+        type: 'plant', // Slot type
         crop: cropId,
         stage: 0, // Legacy field
         plantedAt: now, // Authoritative timestamp for growth

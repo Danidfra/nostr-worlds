@@ -58,13 +58,13 @@ export interface MapState {
  * - The 'stage' field is LEGACY and should NOT be used for rendering
  * - Rendering must always use computeGrowthStage() when crop metadata exists
  * 
- * NOTE: Currently contains plant-specific fields (crop, plantedAt, etc.) for backward compatibility.
- * Future versions will generalize these fields to support multiple entity types.
+ * SlotState is the ONLY source of truth for what exists in a slot.
+ * SlotAction (kind 14159) represents intent, not state.
  */
 export interface SlotState {
   /** Event object */
   event: NostrEvent;
-  /** Slot identifier (d tag) - format: slot:world:<worldId>:<mapId>:<x>:<y> */
+  /** Slot identifier (d tag) - format: slot:<world>:<map>:<x>:<y> */
   id: string;
   /** Schema version */
   version: string;
@@ -77,14 +77,16 @@ export interface SlotState {
     x: number;
     y: number;
   };
+  /** Slot entity type (plant, empty, rock, decoration, etc.) */
+  type: 'plant' | 'empty' | string;
   
-  // Temporary plant-specific fields (will be generalized later)
+  // Plant-specific fields (only present when type === 'plant')
   /** Crop identifier */
-  crop: string;
+  crop?: string;
   /** Growth stage (0-based index) - LEGACY: Stage is now computed from time, not stored */
-  stage: number;
+  stage?: number;
   /** Planting timestamp - Used for time-based growth computation */
-  plantedAt: number;
+  plantedAt?: number;
   /** Optional: Ready-to-harvest timestamp */
   readyAt?: number;
   /** Optional: Harvest count */
@@ -96,9 +98,11 @@ export interface SlotState {
   /** Optional: Expiration timestamp */
   expiresAt?: number;
   
-  // Future-proof: Entity type discrimination
-  /** Optional: Slot entity type (plant, empty, rock, decoration, etc.) */
-  type?: 'plant' | 'empty' | string;
+  // Empty slot fields (only present when type === 'empty')
+  /** Slot status for empty slots */
+  status?: 'empty';
+  /** Last harvest timestamp for empty slots */
+  lastHarvestedAt?: number;
 }
 
 /**
@@ -173,4 +177,38 @@ export interface CropsMetadata {
   tileSize?: number;
   /** Optional layout defaults */
   layoutDefaults?: Record<string, unknown>;
+}
+
+/**
+ * SlotAction (Kind 14159)
+ * Represents a player-issued action intent on a specific slot
+ * 
+ * SlotAction represents INTENT, not state.
+ * SlotAction is immutable and NOT addressable.
+ * SlotState (kind 31417) is the authoritative state.
+ */
+export interface SlotAction {
+  /** Event object */
+  event: NostrEvent;
+  /** Schema version */
+  version: string;
+  /** World identifier */
+  worldId: string;
+  /** Map identifier */
+  mapId: string;
+  /** Slot coordinates */
+  slot: {
+    x: number;
+    y: number;
+  };
+  /** Slot address (d tag format used by SlotState) */
+  slotD: string;
+  /** Action type (harvest, plant, water, etc.) */
+  action: 'harvest' | 'plant' | string;
+  /** Expected slot revision (for concurrency control) */
+  expectedRev: number;
+  /** Client-side deduplication ID (UUID) */
+  clientNonce: string;
+  /** Crop identifier (only for plant action) */
+  crop?: string;
 }

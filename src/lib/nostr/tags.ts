@@ -1,5 +1,5 @@
 import type { NostrEvent } from '@nostrify/nostrify';
-import type { WorldState, MapState, SlotState } from './types';
+import type { WorldState, MapState, SlotState, SlotAction } from './types';
 
 /**
  * Get a tag value by name
@@ -8,12 +8,7 @@ function getTag(event: NostrEvent, tagName: string): string | undefined {
   return event.tags.find(([name]) => name === tagName)?.[1];
 }
 
-/**
- * Get a tag value by name (second value)
- */
-function getTagValue(event: NostrEvent, tagName: string, index: number = 1): string | undefined {
-  return event.tags.find(([name]) => name === tagName)?.[index];
-}
+
 
 /**
  * Parse a WorldState event (kind 31415)
@@ -87,7 +82,7 @@ export function parseMapState(event: NostrEvent): MapState | null {
  * Parse a SlotState event (kind 31417)
  * 
  * Parses an addressable event representing the state of a grid slot.
- * Currently supports plant-specific fields for backward compatibility.
+ * Supports both plant slots and empty slots.
  */
 export function parseSlotState(event: NostrEvent): SlotState | null {
   if (event.kind !== 31417) return null;
@@ -97,11 +92,8 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
   const v = getTag(event, 'v');
   const worldId = getTag(event, 'world');
   const mapId = getTag(event, 'map');
-  const crop = getTag(event, 'crop');
+  const type = getTag(event, 'type');
   
-  // Optional stage tag (legacy - stage is now computed from time)
-  const stageStr = getTag(event, 'stage');
-
   // Parse slot tag - supports both formats:
   // Format 1: ["slot", "3", "2"] - separate x,y values
   // Format 2: ["slot", "3:2"] - colon-separated string
@@ -124,8 +116,8 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     }
   }
 
-  // Validate required tags (stage is now optional)
-  if (!d || !v || !worldId || !mapId || !slotX || !slotY || !crop) {
+  // Validate required base tags
+  if (!d || !v || !worldId || !mapId || !slotX || !slotY) {
     return null;
   }
 
@@ -136,11 +128,32 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     return null;
   }
 
-  // Parse stage (optional - defaults to 0 if missing)
-  const stage = stageStr ? parseInt(stageStr, 10) : 0;
-  if (!Number.isFinite(stage)) return null;
+  // Base slot state
+  const baseState = {
+    event,
+    id: d,
+    version: v,
+    worldId,
+    mapId,
+    slot: { x, y },
+    type: type || 'plant', // Default to 'plant' for backward compatibility
+  };
 
-  // Timing tags
+  // Handle empty slots
+  if (type === 'empty') {
+    const status = getTag(event, 'status');
+    const lastHarvestedAtStr = getTag(event, 'last_harvested_at');
+    
+    return {
+      ...baseState,
+      status: status as 'empty' | undefined,
+      lastHarvestedAt: lastHarvestedAtStr ? parseInt(lastHarvestedAtStr, 10) : undefined,
+    };
+  }
+
+  // Handle plant slots (including legacy events without type tag)
+  const crop = getTag(event, 'crop');
+  const stageStr = getTag(event, 'stage');
   const plantedAtStr = getTag(event, 'planted_at');
   const readyAtStr = getTag(event, 'ready_at');
   const harvestCountStr = getTag(event, 'harvest_count');
@@ -148,25 +161,25 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
   const regrowAtStr = getTag(event, 'regrow_at');
   const expiresAtStr = getTag(event, 'expires_at');
 
+  // For plant slots, crop is required
+  if (!crop) {
+    return null;
+  }
+
+  // Parse stage (optional - defaults to 0 if missing)
+  const stage = stageStr ? parseInt(stageStr, 10) : 0;
+  if (!Number.isFinite(stage)) return null;
+
   // Parse planted_at with fallback to event.created_at
-  // This ensures all plants have a valid timestamp for growth computation
   const plantedAt = plantedAtStr
     ? parseInt(plantedAtStr, 10)
     : event.created_at;
 
   return {
-    event,
-    id: d,
-    version: v,
-    worldId,
-    mapId,
-    slot: {
-      x,
-      y,
-    },
+    ...baseState,
     crop,
-    stage, // Legacy field - rendering uses computed stage from time
-    plantedAt, // Required for time-based growth (fallback to created_at)
+    stage,
+    plantedAt,
     readyAt: readyAtStr ? parseInt(readyAtStr, 10) : undefined,
     harvestCount: harvestCountStr ? parseInt(harvestCountStr, 10) : undefined,
     harvestMax: harvestMaxStr ? parseInt(harvestMaxStr, 10) : undefined,
@@ -194,4 +207,84 @@ export function validateMapState(event: NostrEvent): boolean {
  */
 export function validateSlotState(event: NostrEvent): boolean {
   return parseSlotState(event) !== null;
+}
+
+/**
+ * Parse a SlotAction event (kind 14159)
+ * 
+ * Parses an immutable action event representing player intent.
+ */
+export function parseSlotAction(event: NostrEvent): SlotAction | null {
+  if (event.kind !== 14159) return null;
+
+  // Required tags
+  const v = getTag(event, 'v');
+  const worldId = getTag(event, 'world');
+  const mapId = getTag(event, 'map');
+  const slotD = getTag(event, 'slot_d');
+  const action = getTag(event, 'action');
+  const expectedRevStr = getTag(event, 'expected_rev');
+  const clientNonce = getTag(event, 'client_nonce');
+
+  // Parse slot tag
+  const slotTag = event.tags.find(([name]) => name === 'slot');
+  if (!slotTag) return null;
+
+  const slotX = slotTag[1];
+  const slotY = slotTag[2];
+
+  // Validate required tags
+  if (!v || !worldId || !mapId || !slotX || !slotY || !slotD || !action || !expectedRevStr || !clientNonce) {
+    return null;
+  }
+
+  // Parse coordinates
+  const x = parseInt(slotX, 10);
+  const y = parseInt(slotY, 10);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  // Parse expected revision
+  const expectedRev = parseInt(expectedRevStr, 10);
+  if (!Number.isFinite(expectedRev)) {
+    return null;
+  }
+
+  // Optional crop tag (required for plant action)
+  const crop = getTag(event, 'crop');
+
+  return {
+    event,
+    version: v,
+    worldId,
+    mapId,
+    slot: { x, y },
+    slotD,
+    action,
+    expectedRev,
+    clientNonce,
+    crop,
+  };
+}
+
+/**
+ * Validate SlotAction events
+ */
+export function validateSlotAction(event: NostrEvent): boolean {
+  return parseSlotAction(event) !== null;
+}
+
+/**
+ * Get the current revision of a SlotState
+ * 
+ * For MVP implementation:
+ * - If SlotState.type === 'plant' → rev = plantedAt
+ * - Else → rev = SlotState.event.created_at
+ */
+export function getSlotRevision(slotState: SlotState): number {
+  if (slotState.type === 'plant' && slotState.plantedAt) {
+    return slotState.plantedAt;
+  }
+  return slotState.event.created_at;
 }

@@ -6,6 +6,8 @@ import { useMapStates } from '@/hooks/useMapStates';
 import { useSlotStates } from '@/hooks/useSlotStates';
 import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
 import { usePlantingActions, type OptimisticSlot } from '@/hooks/usePlantingActions';
+import { useSlotActions } from '@/hooks/useSlotActions';
+import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { computeGrid } from '@/lib/renderer/grid';
 import { computeGrowthStage, computeSecondsUntilNextStage } from '@/lib/game/growth';
@@ -214,6 +216,10 @@ function ResponsiveWorldView({
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const { plantSeed } = usePlantingActions();
+  const { harvestSlot } = useSlotActions();
+  
+  // Enable host action processor (processes SlotAction events in background)
+  useSlotActionProcessor(worldId, true);
   
   // Track natural image size and rendered size
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
@@ -285,6 +291,31 @@ function ResponsiveWorldView({
   const handleTileClick = (slotX: number, slotY: number) => {
     setSelectedSlot({ x: slotX, y: slotY });
     setIsSeedDialogOpen(true);
+  };
+
+  // Handle plant click - harvest the plant
+  const handlePlantClick = async (slot: SlotState | OptimisticSlot) => {
+    // Don't allow harvesting pending slots
+    if ('__pending' in slot && slot.__pending) {
+      return;
+    }
+
+    // Only harvest plant slots
+    if (slot.type !== 'plant' || !slot.crop) {
+      return;
+    }
+
+    try {
+      await harvestSlot({
+        worldId,
+        mapId,
+        slotX: slot.slot.x,
+        slotY: slot.slot.y,
+        currentSlotState: slot,
+      });
+    } catch (error) {
+      console.error('Failed to harvest:', error);
+    }
   };
 
   // Handle seed selection - plant the seed
@@ -420,14 +451,15 @@ function ResponsiveWorldView({
             {/* Interactive Grid Layer - hover + click */}
             {!isSlotsLoading && (
               <InteractiveGridLayer
-                naturalWidth={naturalSize.width}
-                naturalHeight={naturalSize.height}
+                _naturalWidth={naturalSize.width}
+                _naturalHeight={naturalSize.height}
                 offsetX={offsetX}
                 offsetY={offsetY}
                 scale={scale}
                 grid={grid}
                 slots={slots || []}
                 onTileClick={handleTileClick}
+                onPlantClick={handlePlantClick}
               />
             )}
           </div>
@@ -470,6 +502,11 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
 
   // Check if this is an optimistic (pending) slot
   const isPending = '__pending' in slot && slot.__pending;
+
+  // Only render sprites for plant slots
+  if (slot.type !== 'plant' || !slot.crop) {
+    return null;
+  }
 
   // Try to load crop metadata from dictionary
   // Safe check: ensure crops is an object (dictionary) before accessing
