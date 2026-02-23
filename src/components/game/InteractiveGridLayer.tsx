@@ -20,8 +20,8 @@ interface InteractiveGridLayerProps {
  * InteractiveGridLayer - Handles mouse interaction with the grid
  * 
  * Provides:
- * - Hover highlighting on empty tiles
- * - Click detection for planting
+ * - Hover highlighting on plantable tiles (empty or no slot)
+ * - Click detection for planting on empty/missing slots
  * - Click detection for harvesting plants
  * - Coordinate conversion from mouse to grid slot
  */
@@ -53,8 +53,8 @@ export function InteractiveGridLayer({
       grid
     );
 
-    // Only hover empty slots
-    if (slot && !isSlotOccupied(slot.x, slot.y, slots)) {
+    // Hover only if slot is plantable (empty or doesn't exist)
+    if (slot && isSlotPlantable(slot.x, slot.y, slots)) {
       setHoveredSlot(slot);
     } else {
       setHoveredSlot(null);
@@ -82,16 +82,22 @@ export function InteractiveGridLayer({
 
     if (!slot) return;
 
-    // Check if slot is occupied
-    const occupiedSlot = getSlotAt(slot.x, slot.y, slots);
+    // Get slot state at this position
+    const slotState = getSlotAt(slot.x, slot.y, slots);
 
-    if (occupiedSlot) {
-      // Click on plant - trigger harvest callback if available
-      if (onPlantClick) {
-        onPlantClick(occupiedSlot);
+    if (slotState) {
+      // Slot exists - check type
+      if (slotState.type === 'plant') {
+        // Plant slot - trigger harvest callback
+        if (onPlantClick) {
+          onPlantClick(slotState);
+        }
+      } else if (slotState.type === 'empty') {
+        // Empty slot - trigger plant callback
+        onTileClick(slot.x, slot.y);
       }
     } else {
-      // Click on empty slot - trigger plant callback
+      // No slot exists - trigger plant callback
       onTileClick(slot.x, slot.y);
     }
   };
@@ -132,14 +138,27 @@ export function InteractiveGridLayer({
 }
 
 /**
- * Check if a slot is occupied
+ * Check if a slot is plantable (empty or doesn't exist)
+ * 
+ * A slot is plantable if:
+ * - No slot exists at this position
+ * - OR slot exists with type='empty'
  */
-function isSlotOccupied(
+function isSlotPlantable(
   slotX: number,
   slotY: number,
   slots: (SlotState | OptimisticSlot)[]
 ): boolean {
-  return slots.some((slot) => slot.slot.x === slotX && slot.slot.y === slotY);
+  const slot = slots.find((s) => s.slot.x === slotX && s.slot.y === slotY);
+  
+  // No slot = plantable
+  if (!slot) return true;
+  
+  // Empty slot = plantable
+  if (slot.type === 'empty') return true;
+  
+  // Plant slot = not plantable (should harvest first)
+  return false;
 }
 
 /**

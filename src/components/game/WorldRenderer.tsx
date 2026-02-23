@@ -12,7 +12,7 @@ import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
-import { computeGrowthStage, computeSecondsUntilNextStage } from '@/lib/game/growth';
+import { computeGrowthStage, computeSecondsUntilNextStage, isHarvestable } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -296,7 +296,7 @@ function ResponsiveWorldView({
     setIsSeedDialogOpen(true);
   };
 
-  // Handle plant click - harvest the plant
+  // Handle plant click - harvest the plant (only if ready)
   const handlePlantClick = async (slot: SlotState | OptimisticSlot) => {
     // Don't allow harvesting pending slots
     if ('__pending' in slot && slot.__pending) {
@@ -307,6 +307,33 @@ function ResponsiveWorldView({
     if (slot.type !== 'plant' || !slot.crop) {
       return;
     }
+
+    // Check if plant is ready to harvest
+    const cropMeta = renderpack.crops?.crops?.[slot.crop];
+    if (!cropMeta) {
+      console.warn('[handlePlantClick] No crop metadata found for', slot.crop);
+      return;
+    }
+
+    const plantedAt = slot.plantedAt ?? slot.event.created_at;
+    const ready = isHarvestable(plantedAt, nowSec, cropMeta);
+
+    if (!ready) {
+      console.log('[handlePlantClick] Plant not ready to harvest', {
+        crop: slot.crop,
+        plantedAt,
+        nowSec,
+        currentStage: computeGrowthStage(plantedAt, nowSec, cropMeta),
+        maxStage: cropMeta.stages - 1,
+      });
+      // TODO: Show "not ready" feedback to user
+      return;
+    }
+
+    console.log('[handlePlantClick] Harvesting ready plant', {
+      crop: slot.crop,
+      slot: slot.slot,
+    });
 
     try {
       await harvestSlot({

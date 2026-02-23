@@ -88,3 +88,23 @@ export function computeSecondsUntilNextStage(
 
   return secondsRemaining;
 }
+
+/**
+ * Check if a plant is ready to harvest
+ * 
+ * A plant is harvestable when it has reached its final growth stage.
+ * 
+ * @param plantedAtSec - Unix timestamp when plant was planted
+ * @param nowSec - Current unix timestamp
+ * @param cropMeta - Crop metadata from renderpack
+ * @returns True if plant is ready to harvest
+ */
+export function isHarvestable(
+  plantedAtSec: number,
+  nowSec: number,
+  cropMeta: CropMetadata
+): boolean {
+  const computedStage = computeGrowthStage(plantedAtSec, nowSec, cropMeta);
+  const maxStage = cropMeta.stages - 1;
+  return computedStage >= maxStage;
+}
