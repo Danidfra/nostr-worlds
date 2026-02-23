@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
+import { parseSlotAction, parseSlotState, getSlotRevision, legacyAliases } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction } from '@/lib/nostr/types';
+import type { NostrEvent } from '@nostrify/nostrify';
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -87,13 +88,18 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
 
         try {
           // Get current slot state from cache first
+          // Support legacy aliases (plant: vs slot: prefix)
+          const aliases = legacyAliases(action.slotD);
+          
           const allSlots = queryClient.getQueryData<SlotState[]>([
             'slotstates',
             action.worldId,
             action.mapId,
           ]);
 
-          let currentSlot = allSlots?.find((s) => s.id === action.slotD);
+          // Find slot matching any alias (normalized IDs are used in parsed slots)
+          let currentSlot = allSlots?.find((s) => aliases.includes(s.id));
+          let legacyD: string | undefined;
 
           // If slot not in cache, fetch from relay using indexable #t tag
           if (!currentSlot && relayUrl) {
@@ -119,21 +125,37 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
               totalFetched: slotEvents.length,
             });
 
-            // Parse all events and find the one matching slotD
+            // Parse all events and find the one matching slotD (or any legacy alias)
             const parsedSlots: SlotState[] = [];
+            let matchedEvent: NostrEvent | null = null;
+            
             for (const event of slotEvents) {
               const parsed = parseSlotState(event);
               if (parsed) {
                 parsedSlots.push(parsed);
-                if (parsed.id === action.slotD) {
+                
+                // Check if this event's raw d tag matches any alias
+                const rawD = event.tags.find(([name]) => name === 'd')?.[1];
+                if (rawD && aliases.includes(rawD)) {
                   currentSlot = parsed;
+                  matchedEvent = event;
                 }
               }
             }
 
-            if (currentSlot) {
+            if (currentSlot && matchedEvent) {
+              const rawD = matchedEvent.tags.find(([name]) => name === 'd')?.[1];
+              const isLegacy = rawD?.startsWith('plant:');
+              
+              // Store legacy D for migration tracking
+              if (isLegacy && rawD) {
+                legacyD = rawD;
+              }
+              
               console.log('[SlotActionProcessor] Found slot from relay', {
                 slotD: action.slotD,
+                matchedRawD: rawD,
+                isLegacy,
                 type: currentSlot.type,
                 crop: currentSlot.crop,
               });
@@ -186,10 +208,12 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
             action: action.action,
             slotD: action.slotD,
             currentRev: currentSlot ? getSlotRevision(currentSlot) : 0,
+            legacyMigration: !!legacyD,
           });
 
           // Apply action by publishing new SlotState to the same relay
-          await applyAction(action, currentSlot, nostr, relayUrl, user);
+          // Pass legacyD if we're migrating from legacy format
+          await applyAction(action, currentSlot, nostr, relayUrl, user, legacyD);
 
           // Mark as processed
           processedActionsRef.current.add(actionKey);
@@ -295,47 +319,69 @@ function validateAction(
 
 /**
  * Apply a validated action by publishing updated SlotState
+ * 
+ * FORWARD MIGRATION:
+ * - Always publishes using canonical "slot:" format in d tag
+ * - If currentSlot used legacy "plant:" format, includes legacy_d tag for reference
+ * - This gradually migrates the world to the new format
  */
 async function applyAction(
   action: SlotAction,
   currentSlot: SlotState | undefined,
   nostr: ReturnType<typeof useNostr>['nostr'],
   relayUrl: string,
-  user: NonNullable<ReturnType<typeof useCurrentUser>['user']>
+  user: NonNullable<ReturnType<typeof useCurrentUser>['user']>,
+  legacyD?: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
+
+  // Ensure we always use canonical "slot:" format
+  const canonicalSlotD = action.slotD.startsWith('slot:') 
+    ? action.slotD 
+    : action.slotD.replace(/^plant:/, 'slot:');
+
+  const isLegacyMigration = legacyD && legacyD.startsWith('plant:');
 
   console.log('[SlotActionProcessor] Publishing SlotState to relay', {
     relayUrl,
     action: action.action,
-    slotD: action.slotD,
+    slotD: canonicalSlotD,
+    legacyMigration: isLegacyMigration,
   });
 
   const relay = nostr.relay(relayUrl);
 
   if (action.action === 'harvest') {
     // Harvest: Convert plant slot to empty slot
+    const tags: string[][] = [
+      ['d', canonicalSlotD], // Always use canonical format
+      ['v', '1'],
+      ['world', action.worldId],
+      ['map', action.mapId],
+      ['slot', action.slot.x.toString(), action.slot.y.toString()],
+      ['type', 'empty'],
+      ['status', 'empty'],
+      ['last_harvested_at', now.toString()],
+      ['t', action.worldId],
+    ];
+
+    // Include legacy_d tag if migrating from legacy format
+    if (isLegacyMigration) {
+      tags.push(['legacy_d', legacyD]);
+    }
+
     const event = await user.signer.signEvent({
       kind: 31417,
       content: '',
-      tags: [
-        ['d', action.slotD],
-        ['v', '1'],
-        ['world', action.worldId],
-        ['map', action.mapId],
-        ['slot', action.slot.x.toString(), action.slot.y.toString()],
-        ['type', 'empty'],
-        ['status', 'empty'],
-        ['last_harvested_at', now.toString()],
-        ['t', action.worldId],
-      ],
+      tags,
       created_at: now,
     });
 
     await relay.event(event);
 
     console.log('[SlotActionProcessor] Published empty SlotState after harvest', {
-      slotD: action.slotD,
+      slotD: canonicalSlotD,
+      legacyD: isLegacyMigration ? legacyD : undefined,
       relayUrl,
       eventId: event.id,
     });
@@ -345,28 +391,36 @@ async function applyAction(
       throw new Error('Missing crop for plant action');
     }
 
+    const tags: string[][] = [
+      ['d', canonicalSlotD], // Always use canonical format
+      ['v', '1'],
+      ['world', action.worldId],
+      ['map', action.mapId],
+      ['slot', action.slot.x.toString(), action.slot.y.toString()],
+      ['type', 'plant'],
+      ['crop', action.crop],
+      ['stage', '0'],
+      ['planted_at', now.toString()],
+      ['t', action.worldId],
+    ];
+
+    // Include legacy_d tag if migrating from legacy format
+    if (isLegacyMigration) {
+      tags.push(['legacy_d', legacyD]);
+    }
+
     const event = await user.signer.signEvent({
       kind: 31417,
       content: '',
-      tags: [
-        ['d', action.slotD],
-        ['v', '1'],
-        ['world', action.worldId],
-        ['map', action.mapId],
-        ['slot', action.slot.x.toString(), action.slot.y.toString()],
-        ['type', 'plant'],
-        ['crop', action.crop],
-        ['stage', '0'],
-        ['planted_at', now.toString()],
-        ['t', action.worldId],
-      ],
+      tags,
       created_at: now,
     });
 
     await relay.event(event);
 
     console.log('[SlotActionProcessor] Published plant SlotState', {
-      slotD: action.slotD,
+      slotD: canonicalSlotD,
+      legacyD: isLegacyMigration ? legacyD : undefined,
       crop: action.crop,
       relayUrl,
       eventId: event.id,
