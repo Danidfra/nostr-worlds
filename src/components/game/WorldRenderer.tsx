@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useGameContext } from '@/contexts/GameContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useWorldStates } from '@/hooks/useWorldStates';
 import { useMapStates } from '@/hooks/useMapStates';
 import { useSlotStates } from '@/hooks/useSlotStates';
 import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
-import { usePlantingActions, type OptimisticSlot } from '@/hooks/usePlantingActions';
+import { type OptimisticSlot } from '@/hooks/usePlantingActions';
 import { useSlotActions } from '@/hooks/useSlotActions';
 import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
+import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
 import { computeGrowthStage, computeSecondsUntilNextStage } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
@@ -215,11 +217,12 @@ function ResponsiveWorldView({
 }: ResponsiveWorldViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
-  const { plantSeed } = usePlantingActions();
-  const { harvestSlot } = useSlotActions();
+  const queryClient = useQueryClient();
+  const { plantSlot, harvestSlot } = useSlotActions();
   
   // Enable host action processor (processes SlotAction events in background)
-  useSlotActionProcessor(worldId, true);
+  // Use the same relay for reading actions and publishing SlotState
+  useSlotActionProcessor(worldId, DEFAULT_GAME_RELAY, true);
   
   // Track natural image size and rendered size
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
@@ -318,17 +321,22 @@ function ResponsiveWorldView({
     }
   };
 
-  // Handle seed selection - plant the seed
+  // Handle seed selection - plant the seed via SlotAction
   const handleSelectSeed = async (cropId: string) => {
     if (!selectedSlot) return;
 
+    // Get current slot state (if exists)
+    const slots = renderpack ? await queryClient.getQueryData<SlotState[]>(['slotstates', worldId, mapId]) : undefined;
+    const currentSlot = slots?.find((s) => s.slot.x === selectedSlot.x && s.slot.y === selectedSlot.y);
+
     try {
-      await plantSeed({
+      await plantSlot({
         worldId,
         mapId,
         slotX: selectedSlot.x,
         slotY: selectedSlot.y,
         cropId,
+        currentSlotState: currentSlot,
       });
     } catch (error) {
       console.error('Failed to plant seed:', error);

@@ -3,11 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { parseSlotAction, getSlotRevision } from '@/lib/nostr/tags';
+import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction } from '@/lib/nostr/types';
-import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
-
-
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -18,8 +15,12 @@ import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
  * 3. Validates expected_rev against current SlotState
  * 4. Validates action vs current SlotState
  * 5. Publishes updated SlotState (31417) for valid actions
+ * 
+ * @param worldId - World identifier to filter actions
+ * @param relayUrl - Relay URL to use for querying actions and publishing states
+ * @param enabled - Whether to enable the processor
  */
-export function useSlotActionProcessor(worldId?: string, enabled: boolean = true) {
+export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enabled: boolean = true) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { mutateAsync: publishEvent } = useNostrPublish();
@@ -32,11 +33,11 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
    * Query SlotAction events
    */
   const { data: actions = [] } = useQuery({
-    queryKey: ['slotactions', worldId],
+    queryKey: ['slotactions', worldId, relayUrl],
     queryFn: async () => {
-      if (!worldId) return [];
+      if (!worldId || !relayUrl) return [];
 
-      const relay = nostr.relay(DEFAULT_GAME_RELAY);
+      const relay = nostr.relay(relayUrl);
       
       const events = await relay.query([
         {
@@ -55,10 +56,10 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
         }
       }
 
-      console.log(`[SlotActionProcessor] Fetched ${parsedActions.length} actions for world ${worldId}`);
+      console.log(`[SlotActionProcessor] Fetched ${parsedActions.length} actions for world ${worldId} from ${relayUrl}`);
       return parsedActions;
     },
-    enabled: enabled && !!worldId && !!user,
+    enabled: enabled && !!worldId && !!relayUrl && !!user,
     refetchInterval: 5000, // Poll every 5 seconds
   });
 
@@ -66,7 +67,7 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
    * Process actions and apply to SlotState
    */
   useEffect(() => {
-    if (!actions.length || !user) return;
+    if (!actions.length || !user || !relayUrl) return;
 
     const processActions = async () => {
       for (const action of actions) {
@@ -83,17 +84,45 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
           slotD: action.slotD,
           pubkey: action.event.pubkey.substring(0, 8),
           clientNonce: action.clientNonce,
+          expectedRev: action.expectedRev,
         });
 
         try {
-          // Get current slot state from cache
+          // Get current slot state from cache first
           const allSlots = queryClient.getQueryData<SlotState[]>([
             'slotstates',
             action.worldId,
             action.mapId,
           ]);
 
-          const currentSlot = allSlots?.find((s) => s.id === action.slotD);
+          let currentSlot = allSlots?.find((s) => s.id === action.slotD);
+
+          // If slot not in cache, fetch from relay
+          if (!currentSlot && relayUrl) {
+            console.log('[SlotActionProcessor] Slot not in cache, fetching from relay...', {
+              slotD: action.slotD,
+            });
+
+            const relay = nostr.relay(relayUrl);
+            const slotEvents = await relay.query([
+              {
+                kinds: [31417],
+                '#d': [action.slotD],
+                limit: 1,
+              },
+            ]);
+
+            if (slotEvents.length > 0) {
+              const parsedSlot = parseSlotState(slotEvents[0]);
+              if (parsedSlot) {
+                currentSlot = parsedSlot;
+                console.log('[SlotActionProcessor] Fetched slot from relay', {
+                  slotD: action.slotD,
+                  type: currentSlot.type,
+                });
+              }
+            }
+          }
 
           // Validate action
           const validationResult = validateAction(action, currentSlot);
@@ -103,15 +132,21 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
               reason: validationResult.reason,
               action: action.action,
               slotD: action.slotD,
+              expectedRev: action.expectedRev,
+              currentRev: currentSlot ? getSlotRevision(currentSlot) : 'undefined',
             });
-            // Mark as processed to avoid re-checking
-            processedActionsRef.current.add(actionKey);
+            // Only mark as processed if it's truly invalid (not a cache miss issue)
+            // If slot doesn't exist and action is plant with rev=0, it's valid
+            if (validationResult.reason !== 'Slot not loaded yet') {
+              processedActionsRef.current.add(actionKey);
+            }
             continue;
           }
 
           console.log('[SlotActionProcessor] Valid action, applying...', {
             action: action.action,
             slotD: action.slotD,
+            currentRev: currentSlot ? getSlotRevision(currentSlot) : 0,
           });
 
           // Apply action by publishing new SlotState
@@ -137,7 +172,7 @@ export function useSlotActionProcessor(worldId?: string, enabled: boolean = true
     };
 
     processActions();
-  }, [actions, user, queryClient, publishEvent]);
+  }, [actions, user, relayUrl, queryClient, publishEvent, nostr]);
 
   return {
     actionsProcessed: processedActionsRef.current.size,
