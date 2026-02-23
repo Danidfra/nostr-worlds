@@ -49,6 +49,11 @@ export interface MapState {
 /**
  * PlantState (Kind 31417)
  * Represents a single plant instance on a map
+ * 
+ * GROWTH MODEL: Time-based (Route A)
+ * - Growth stage is computed from (plantedAt, nowSec, cropMeta.stageDurationSec)
+ * - The 'stage' field is LEGACY and should NOT be used for rendering
+ * - Rendering must always use computeGrowthStage() when crop metadata exists
  */
 export interface PlantState {
   /** Event object */

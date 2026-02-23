@@ -76,17 +76,26 @@ export function usePlantingActions() {
 
       // Create optimistic plant
       const plantId = `plant:${worldId}:${mapId.split(':').pop()}:${slotX}:${slotY}`;
+      const now = Math.floor(Date.now() / 1000);
+      
       const optimisticPlant: OptimisticPlant = {
-        event: {} as never, // Placeholder - not used in rendering
+        event: {
+          id: '',
+          pubkey: '',
+          created_at: now,
+          kind: 31417,
+          tags: [],
+          sig: '',
+        },
         id: plantId,
         version: '1',
         worldId,
         mapId,
         slot: { x: slotX, y: slotY },
         crop: cropId,
-        stage: 0,
-        plantedAt: Math.floor(Date.now() / 1000),
-        __pending: true, // Mark as pending
+        stage: 0, // Legacy field
+        plantedAt: now, // Authoritative timestamp for growth
+        __pending: true,
       };
 
       // Add optimistic plant to cache

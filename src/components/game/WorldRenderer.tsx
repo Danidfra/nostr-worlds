@@ -473,16 +473,34 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
   const cropMeta = renderpack.crops?.crops?.[plant.crop];
   const hasCropSprite = cropMeta && cropMeta.file;
 
+  // Safe plantedAt with triple fallback (should never be undefined)
+  // 1. Use plant.plantedAt (authoritative)
+  // 2. Fallback to event.created_at (for legacy events)
+  // 3. Fallback to nowSec (last resort - should never happen)
+  const plantedAt = plant.plantedAt ?? plant.event?.created_at ?? nowSec;
+
+  // Development assertion - warn if we're using fallback
+  if (process.env.NODE_ENV === 'development') {
+    if (!plant.plantedAt) {
+      console.warn('[PlantSprite] Missing plantedAt, using fallback:', {
+        plantId: plant.id,
+        eventId: plant.event?.id,
+        eventCreatedAt: plant.event?.created_at,
+        fallbackUsed: plantedAt,
+      });
+    }
+  }
+
   // Compute current growth stage based on time elapsed
-  // Always use computeGrowthStage when crop metadata is available
-  // plant.stage is legacy data and should not be trusted for rendering
+  // ALWAYS use computeGrowthStage when crop metadata is available
+  // plant.stage is LEGACY data and NEVER used for rendering
   const computedStage = cropMeta
-    ? computeGrowthStage(plant.plantedAt, nowSec, cropMeta)
+    ? computeGrowthStage(plantedAt, nowSec, cropMeta)
     : 0; // Fallback to seed stage if no metadata
 
   // Compute seconds until next stage (for debug tooltip)
   const secondsUntilNext = cropMeta
-    ? computeSecondsUntilNextStage(plant.plantedAt, nowSec, cropMeta, computedStage)
+    ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
     : null;
 
   return (
@@ -529,18 +547,14 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
           <div>Crop: {plant.crop}</div>
           <div>Stage: {computedStage} / {cropMeta?.stages ? cropMeta.stages - 1 : '?'}</div>
           <div>Slot: {plant.slot.x},{plant.slot.y}</div>
-          {plant.plantedAt && (
-            <>
-              <div>Planted: {new Date(plant.plantedAt * 1000).toLocaleTimeString()}</div>
-              <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
-              <div>Elapsed: {nowSec - plant.plantedAt}s</div>
-              {secondsUntilNext !== null && secondsUntilNext > 0 && (
-                <div className="text-green-400">Next stage: {secondsUntilNext}s</div>
-              )}
-              {secondsUntilNext === null && (
-                <div className="text-yellow-400">Ready to harvest!</div>
-              )}
-            </>
+          <div>Planted: {new Date(plantedAt * 1000).toLocaleTimeString()}</div>
+          <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
+          <div>Elapsed: {nowSec - plantedAt}s</div>
+          {secondsUntilNext !== null && secondsUntilNext > 0 && (
+            <div className="text-green-400">Next stage: {secondsUntilNext}s</div>
+          )}
+          {secondsUntilNext === null && (
+            <div className="text-yellow-400">Ready to harvest!</div>
           )}
           <div className="truncate max-w-[200px]">ID: {plant.id}</div>
           {isPending && <div className="text-yellow-400">Status: Pending</div>}
