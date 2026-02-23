@@ -515,6 +515,21 @@ function ResponsiveWorldView({
 }
 
 /**
+ * Format seconds remaining into human-readable time
+ */
+function formatTimeRemaining(seconds: number): string {
+  if (seconds < 60) {
+    return `Ready in ${Math.ceil(seconds)}s`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) {
+    return `Ready in ${minutes}m`;
+  }
+  const hours = Math.ceil(minutes / 60);
+  return `Ready in ${hours}h`;
+}
+
+/**
  * Render a single slot sprite with time-based growth
  * 
  * Note: Currently renders plant sprites, but will be generalized
@@ -573,14 +588,17 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
     ? computeGrowthStage(plantedAt, nowSec, cropMeta)
     : 0; // Fallback to seed stage if no metadata
 
-  // Compute seconds until next stage (for debug tooltip)
+  // Compute seconds until next stage (for user tooltip)
   const secondsUntilNext = cropMeta
     ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
     : null;
 
+  // Determine if plant is ready to harvest
+  const ready = cropMeta ? isHarvestable(plantedAt, nowSec, cropMeta) : false;
+
   return (
     <div
-      className="absolute group pointer-events-auto cursor-pointer"
+      className="absolute group pointer-events-none"
       style={{
         left: px,
         top: py,
@@ -592,13 +610,16 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
       {/* Render sprite if available, otherwise placeholder */}
       {hasCropSprite && cropMeta ? (
         <div
-          className="w-full h-full"
+          className={`w-full h-full transition-transform duration-200 ${
+            ready ? 'group-hover:scale-105' : ''
+          }`}
           style={{
             backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
             backgroundPosition: `-${computedStage * tileSize}px 0px`,
             backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
             backgroundRepeat: 'no-repeat',
             imageRendering: 'pixelated',
+            filter: ready ? 'brightness(1.1)' : undefined,
           }}
         />
       ) : (
@@ -611,9 +632,34 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpritePro
         </div>
       )}
 
+      {/* Ready to harvest glow effect */}
+      {ready && hasCropSprite && (
+        <div
+          className="absolute inset-0 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+          style={{
+            boxShadow: '0 0 8px 2px rgba(255, 215, 0, 0.6)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
       {/* Pending indicator */}
       {isPending && (
         <div className="absolute top-0 right-0 w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+      )}
+
+      {/* User-facing tooltip: "Not ready" or "Ready in Xs" */}
+      {!showDebug && !ready && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none">
+          {formatTimeRemaining(secondsUntilNext)}
+        </div>
+      )}
+      
+      {/* Fallback tooltip when no crop metadata */}
+      {!showDebug && !ready && !cropMeta && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none">
+          Not ready
+        </div>
       )}
 
       {/* Debug Info on Hover */}
