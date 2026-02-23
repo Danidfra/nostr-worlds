@@ -34,7 +34,7 @@ export function useSlotStates(worldId?: string, mapId?: string) {
       ]);
 
       // Parse and filter by world and map
-      const slots: SlotState[] = [];
+      const slotMap = new Map<string, SlotState>();
       let parsedCount = 0;
       let filteredCount = 0;
 
@@ -43,15 +43,23 @@ export function useSlotStates(worldId?: string, mapId?: string) {
         if (slot) {
           parsedCount++;
           if (slot.worldId === worldId && slot.mapId === mapId) {
-            slots.push(slot);
             filteredCount++;
+            
+            // Deduplicate by d tag - keep only the latest event per slot
+            const existingSlot = slotMap.get(slot.id);
+            if (!existingSlot || event.created_at > existingSlot.event.created_at) {
+              slotMap.set(slot.id, slot);
+            }
           }
         }
       }
 
+      const slots = Array.from(slotMap.values());
+      const deduplicatedCount = slots.length;
+
       // Debug logging
       console.debug(
-        `[useSlotStates] Fetched: ${events.length}, Parsed: ${parsedCount}, Matched: ${filteredCount}`,
+        `[useSlotStates] Fetched: ${events.length}, Parsed: ${parsedCount}, Matched: ${filteredCount}, Deduplicated: ${deduplicatedCount}`,
         { worldId, mapId }
       );
 

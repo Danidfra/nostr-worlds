@@ -8,44 +8,6 @@ function getTag(event: NostrEvent, tagName: string): string | undefined {
   return event.tags.find(([name]) => name === tagName)?.[1];
 }
 
-/**
- * Get legacy aliases for a slot identifier
- * 
- * Legacy SlotState events used "plant:" prefix, new events use "slot:" prefix.
- * This function returns all equivalent identifiers for backward compatibility.
- * 
- * Examples:
- * - "slot:world:farm01:farm:3:2" → ["slot:world:farm01:farm:3:2", "plant:world:farm01:farm:3:2"]
- * - "plant:world:farm01:farm:3:2" → ["plant:world:farm01:farm:3:2", "slot:world:farm01:farm:3:2"]
- * 
- * @param d - Slot identifier (d tag value)
- * @returns Array of equivalent identifiers
- */
-export function legacyAliases(d: string): string[] {
-  if (d.startsWith('slot:')) {
-    return [d, d.replace(/^slot:/, 'plant:')];
-  }
-  if (d.startsWith('plant:')) {
-    return [d, d.replace(/^plant:/, 'slot:')];
-  }
-  return [d];
-}
-
-/**
- * Normalize a slot identifier to canonical form (slot: prefix)
- * 
- * Converts legacy "plant:" identifiers to new "slot:" format.
- * 
- * @param d - Slot identifier (d tag value)
- * @returns Normalized identifier with "slot:" prefix
- */
-export function normalizeSlotId(d: string): string {
-  if (d.startsWith('plant:')) {
-    return d.replace(/^plant:/, 'slot:');
-  }
-  return d;
-}
-
 
 
 /**
@@ -159,6 +121,11 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     return null;
   }
 
+  // Enforce canonical slot: format - reject non-canonical events
+  if (!d.startsWith('slot:')) {
+    return null;
+  }
+
   // Parse and validate slot coordinates
   const x = parseInt(slotX, 10);
   const y = parseInt(slotY, 10);
@@ -166,14 +133,10 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     return null;
   }
 
-  // Normalize the slot ID to canonical form (slot: prefix)
-  // Legacy events used "plant:" prefix, new events use "slot:" prefix
-  const normalizedId = normalizeSlotId(d);
-
   // Base slot state
   const baseState = {
     event,
-    id: normalizedId, // Always use normalized (slot:) form
+    id: d, // Use d exactly as provided
     version: v,
     worldId,
     mapId,
