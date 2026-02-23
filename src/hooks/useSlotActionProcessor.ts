@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
-import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction } from '@/lib/nostr/types';
@@ -23,7 +22,6 @@ import type { SlotState, SlotAction } from '@/lib/nostr/types';
 export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enabled: boolean = true) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
-  const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
   
   // Track processed actions to prevent duplicates
@@ -97,30 +95,70 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
 
           let currentSlot = allSlots?.find((s) => s.id === action.slotD);
 
-          // If slot not in cache, fetch from relay
+          // If slot not in cache, fetch from relay using indexable #t tag
           if (!currentSlot && relayUrl) {
             console.log('[SlotActionProcessor] Slot not in cache, fetching from relay...', {
               slotD: action.slotD,
+              worldId: action.worldId,
             });
 
             const relay = nostr.relay(relayUrl);
+            
+            // Query all SlotStates for this world using indexable #t tag
             const slotEvents = await relay.query([
               {
                 kinds: [31417],
-                '#d': [action.slotD],
-                limit: 1,
+                '#t': [action.worldId], // Use indexable tag instead of #d
+                limit: 500,
               },
             ]);
 
-            if (slotEvents.length > 0) {
-              const parsedSlot = parseSlotState(slotEvents[0]);
-              if (parsedSlot) {
-                currentSlot = parsedSlot;
-                console.log('[SlotActionProcessor] Fetched slot from relay', {
-                  slotD: action.slotD,
-                  type: currentSlot.type,
+            console.log('[SlotActionProcessor] Fetched SlotStates from relay', {
+              relayUrl,
+              worldId: action.worldId,
+              totalFetched: slotEvents.length,
+            });
+
+            // Parse all events and find the one matching slotD
+            const parsedSlots: SlotState[] = [];
+            for (const event of slotEvents) {
+              const parsed = parseSlotState(event);
+              if (parsed) {
+                parsedSlots.push(parsed);
+                if (parsed.id === action.slotD) {
+                  currentSlot = parsed;
+                }
+              }
+            }
+
+            if (currentSlot) {
+              console.log('[SlotActionProcessor] Found slot from relay', {
+                slotD: action.slotD,
+                type: currentSlot.type,
+                crop: currentSlot.crop,
+              });
+
+              // Update cache with all fetched slots for this world/map
+              const mapSlots = parsedSlots.filter(
+                (s) => s.worldId === action.worldId && s.mapId === action.mapId
+              );
+              if (mapSlots.length > 0) {
+                queryClient.setQueryData(
+                  ['slotstates', action.worldId, action.mapId],
+                  mapSlots
+                );
+                console.log('[SlotActionProcessor] Updated cache with fetched slots', {
+                  worldId: action.worldId,
+                  mapId: action.mapId,
+                  count: mapSlots.length,
                 });
               }
+            } else {
+              console.warn('[SlotActionProcessor] SlotState not found on relay', {
+                slotD: action.slotD,
+                worldId: action.worldId,
+                totalSlotsFetched: parsedSlots.length,
+              });
             }
           }
 
@@ -134,10 +172,11 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
               slotD: action.slotD,
               expectedRev: action.expectedRev,
               currentRev: currentSlot ? getSlotRevision(currentSlot) : 'undefined',
+              canRetry: validationResult.canRetry,
             });
-            // Only mark as processed if it's truly invalid (not a cache miss issue)
-            // If slot doesn't exist and action is plant with rev=0, it's valid
-            if (validationResult.reason !== 'Slot not loaded yet') {
+            // Only mark as processed if it's not a retryable error
+            // Retryable errors (like relay propagation delays) should be retried later
+            if (!validationResult.canRetry) {
               processedActionsRef.current.add(actionKey);
             }
             continue;
@@ -149,8 +188,8 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
             currentRev: currentSlot ? getSlotRevision(currentSlot) : 0,
           });
 
-          // Apply action by publishing new SlotState
-          await applyAction(action, currentSlot, publishEvent);
+          // Apply action by publishing new SlotState to the same relay
+          await applyAction(action, currentSlot, nostr, relayUrl, user);
 
           // Mark as processed
           processedActionsRef.current.add(actionKey);
@@ -172,7 +211,7 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
     };
 
     processActions();
-  }, [actions, user, relayUrl, queryClient, publishEvent, nostr]);
+  }, [actions, user, relayUrl, queryClient, nostr]);
 
   return {
     actionsProcessed: processedActionsRef.current.size,
@@ -185,11 +224,15 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
 function validateAction(
   action: SlotAction,
   currentSlot?: SlotState
-): { valid: boolean; reason?: string } {
+): { valid: boolean; reason?: string; canRetry?: boolean } {
   if (action.action === 'harvest') {
     // Harvest validation
     if (!currentSlot) {
-      return { valid: false, reason: 'Slot does not exist' };
+      return { 
+        valid: false, 
+        reason: 'SlotState not found on relay',
+        canRetry: true // Don't mark as processed, allow retry in case of relay propagation delay
+      };
     }
 
     if (currentSlot.type !== 'plant') {
@@ -256,13 +299,23 @@ function validateAction(
 async function applyAction(
   action: SlotAction,
   currentSlot: SlotState | undefined,
-  publishEvent: (event: { kind: number; content: string; tags: string[][] }) => Promise<unknown>
+  nostr: ReturnType<typeof useNostr>['nostr'],
+  relayUrl: string,
+  user: NonNullable<ReturnType<typeof useCurrentUser>['user']>
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
 
+  console.log('[SlotActionProcessor] Publishing SlotState to relay', {
+    relayUrl,
+    action: action.action,
+    slotD: action.slotD,
+  });
+
+  const relay = nostr.relay(relayUrl);
+
   if (action.action === 'harvest') {
     // Harvest: Convert plant slot to empty slot
-    await publishEvent({
+    const event = await user.signer.signEvent({
       kind: 31417,
       content: '',
       tags: [
@@ -276,10 +329,15 @@ async function applyAction(
         ['last_harvested_at', now.toString()],
         ['t', action.worldId],
       ],
+      created_at: now,
     });
+
+    await relay.event(event);
 
     console.log('[SlotActionProcessor] Published empty SlotState after harvest', {
       slotD: action.slotD,
+      relayUrl,
+      eventId: event.id,
     });
   } else if (action.action === 'plant') {
     // Plant: Create or update to plant slot
@@ -287,7 +345,7 @@ async function applyAction(
       throw new Error('Missing crop for plant action');
     }
 
-    await publishEvent({
+    const event = await user.signer.signEvent({
       kind: 31417,
       content: '',
       tags: [
@@ -302,11 +360,16 @@ async function applyAction(
         ['planted_at', now.toString()],
         ['t', action.worldId],
       ],
+      created_at: now,
     });
+
+    await relay.event(event);
 
     console.log('[SlotActionProcessor] Published plant SlotState', {
       slotD: action.slotD,
       crop: action.crop,
+      relayUrl,
+      eventId: event.id,
     });
   }
 }
