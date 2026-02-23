@@ -65,16 +65,13 @@ export function SeedSelectDialog({
                 onClick={() => handleSelectSeed(cropId)}
                 className="flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-muted hover:border-primary hover:bg-accent transition-colors"
               >
-                {/* Crop sprite preview (first frame) */}
-                <div
-                  className="w-16 h-16 flex items-center justify-center"
-                  style={{
-                    backgroundImage: `url(${renderpackUrl}/${cropMeta.file})`,
-                    backgroundPosition: '0px 0px',
-                    backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
-                    backgroundRepeat: 'no-repeat',
-                    imageRendering: 'pixelated',
-                  }}
+                {/* Crop sprite preview (harvest/ready frame) */}
+                <CropPreview
+                  file={cropMeta.file}
+                  stages={cropMeta.stages}
+                  harvestStage={cropMeta.harvestStage}
+                  renderpackUrl={renderpackUrl}
+                  tileSize={tileSize}
                 />
                 {/* Crop name */}
                 <span className="text-sm font-medium capitalize">
@@ -86,5 +83,56 @@ export function SeedSelectDialog({
         </ScrollArea>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * CropPreview - Renders a scaled crop sprite preview
+ * 
+ * Shows the harvest/ready frame (not frame 0) with proper scaling
+ * to fit in a 64x64 preview box while maintaining pixelated rendering.
+ */
+interface CropPreviewProps {
+  file: string;
+  stages: number;
+  harvestStage?: number;
+  renderpackUrl: string;
+  tileSize: number;
+}
+
+function CropPreview({ file, stages, harvestStage, renderpackUrl, tileSize }: CropPreviewProps) {
+  // Determine which frame to show (harvest frame or last frame)
+  const frameIndex = harvestStage ?? (stages - 1);
+  
+  // Calculate background position for the correct frame
+  const backgroundPositionX = -(frameIndex * tileSize);
+  
+  // Preview box size (64x64)
+  const previewSize = 64;
+  
+  // Scale factor to fit tileSize into preview box
+  const scale = previewSize / tileSize;
+  
+  return (
+    <div
+      className="w-16 h-16 overflow-hidden flex items-center justify-center"
+      style={{
+        imageRendering: 'pixelated',
+      }}
+    >
+      <div
+        style={{
+          width: tileSize,
+          height: tileSize,
+          backgroundImage: `url(${renderpackUrl}/${file})`,
+          backgroundPosition: `${backgroundPositionX}px 0px`,
+          backgroundSize: `${stages * tileSize}px ${tileSize}px`,
+          backgroundRepeat: 'no-repeat',
+          imageRendering: 'pixelated',
+          transform: `scale(${scale})`,
+          transformOrigin: 'center center',
+        }}
+      />
+    </div>
   );
 }

@@ -3,11 +3,16 @@ import type { ComputedGrid } from './grid';
 /**
  * Convert mouse/pointer coordinates to grid slot
  * 
+ * IMPORTANT: This function should be called from the InteractiveGridLayer
+ * which is already positioned inside the scaled overlay container.
+ * The containerRef should be the InteractiveGridLayer itself, NOT the outer container.
+ * Therefore, we do NOT subtract offsetX/offsetY here (already handled by container positioning).
+ * 
  * @param clientX - Mouse X position (from event)
  * @param clientY - Mouse Y position (from event)
- * @param containerRef - Reference to the container element
- * @param offsetX - Image offset X (from object-fit: contain)
- * @param offsetY - Image offset Y (from object-fit: contain)
+ * @param containerRef - Reference to the InteractiveGridLayer element (already offset)
+ * @param offsetX - UNUSED (kept for API compatibility, should be 0)
+ * @param offsetY - UNUSED (kept for API compatibility, should be 0)
  * @param scale - Scale factor applied to the image
  * @param grid - Computed grid data
  * @returns Grid slot {x, y} or null if outside grid
@@ -21,20 +26,31 @@ export function clientToSlot(
   scale: number,
   grid: ComputedGrid
 ): { x: number; y: number } | null {
-  // Get container bounds
+  // Get container bounds (InteractiveGridLayer is already inside the offset container)
   const rect = containerRef.getBoundingClientRect();
   
   // Convert client coordinates to container-relative
+  // The container is already positioned at the correct offset, so no need to subtract again
   const containerX = clientX - rect.left;
   const containerY = clientY - rect.top;
   
-  // Remove image offset (from object-fit: contain centering)
-  const imageX = containerX - offsetX;
-  const imageY = containerY - offsetY;
-  
   // Scale to natural image coordinates
-  const naturalX = imageX / scale;
-  const naturalY = imageY / scale;
+  // No offset subtraction needed since the container is already offset
+  const naturalX = containerX / scale;
+  const naturalY = containerY / scale;
+  
+  // Debug logging (optional - can be removed in production)
+  if (process.env.NODE_ENV === 'development') {
+    const slot = pixelToSlot(naturalX, naturalY, grid);
+    if (slot) {
+      console.debug('[clientToSlot]', {
+        client: { x: clientX, y: clientY },
+        container: { x: containerX, y: containerY },
+        natural: { x: naturalX, y: naturalY },
+        slot,
+      });
+    }
+  }
   
   // Convert to grid slot
   return pixelToSlot(naturalX, naturalY, grid);
@@ -43,8 +59,11 @@ export function clientToSlot(
 /**
  * Convert pixel coordinates (in natural image space) to grid slot
  * 
- * @param px - Pixel X coordinate
- * @param py - Pixel Y coordinate
+ * Uses robust grid origin computation to handle cells in any order.
+ * The grid origin is the minimum X and Y position of all cells.
+ * 
+ * @param px - Pixel X coordinate (in natural image space)
+ * @param py - Pixel Y coordinate (in natural image space)
  * @param grid - Computed grid data
  * @returns Grid slot {x, y} or null if outside grid
  */
@@ -53,14 +72,19 @@ export function pixelToSlot(
   py: number,
   grid: ComputedGrid
 ): { x: number; y: number } | null {
-  // Get the first cell to determine grid start position
-  const firstCell = grid.cells[0];
-  if (!firstCell) return null;
+  if (grid.cells.length === 0) return null;
   
-  const gridStartX = firstCell.x;
-  const gridStartY = firstCell.y;
+  // Compute grid origin robustly (minimum X and Y across all cells)
+  // This handles cells in any order and works regardless of alignment
+  let gridStartX = grid.cells[0].x;
+  let gridStartY = grid.cells[0].y;
   
-  // Calculate slot position
+  for (const cell of grid.cells) {
+    if (cell.x < gridStartX) gridStartX = cell.x;
+    if (cell.y < gridStartY) gridStartY = cell.y;
+  }
+  
+  // Calculate slot position relative to grid origin
   const relativeX = px - gridStartX;
   const relativeY = py - gridStartY;
   
