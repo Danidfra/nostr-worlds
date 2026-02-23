@@ -6,7 +6,9 @@ import { useMapStates } from '@/hooks/useMapStates';
 import { usePlantStates } from '@/hooks/usePlantStates';
 import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
 import { usePlantingActions, type OptimisticPlant } from '@/hooks/usePlantingActions';
+import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { computeGrid } from '@/lib/renderer/grid';
+import { computeGrowthStage, computeSecondsUntilNextStage } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -152,6 +154,9 @@ export function WorldRenderer() {
   // Compute grid (in natural layout pixel coordinates)
   const grid = computeGrid(renderpack.layout);
 
+  // Live timestamp for time-based growth (updates every 2 seconds)
+  const nowSec = useNowSeconds(2000);
+
   // Render world with responsive scaling
   return (
     <ResponsiveWorldView
@@ -165,6 +170,7 @@ export function WorldRenderer() {
       onToggleDebug={() => setShowDebugGrid(!showDebugGrid)}
       worldId={world.id}
       mapId={mapState.id}
+      nowSec={nowSec}
     />
   );
 }
@@ -189,6 +195,7 @@ interface ResponsiveWorldViewProps {
   onToggleDebug: () => void;
   worldId: string;
   mapId: string;
+  nowSec: number;
 }
 
 function ResponsiveWorldView({
@@ -202,6 +209,7 @@ function ResponsiveWorldView({
   onToggleDebug,
   worldId,
   mapId,
+  nowSec,
 }: ResponsiveWorldViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -403,6 +411,7 @@ function ResponsiveWorldView({
                     grid={grid}
                     renderpack={renderpack}
                     showDebug={showDebugGrid}
+                    nowSec={nowSec}
                   />
                 ))}
               </div>
@@ -439,16 +448,17 @@ function ResponsiveWorldView({
 }
 
 /**
- * Render a single plant sprite
+ * Render a single plant sprite with time-based growth
  */
 interface PlantSpriteProps {
   plant: PlantState | OptimisticPlant;
   grid: ReturnType<typeof computeGrid>;
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebug: boolean;
+  nowSec: number;
 }
 
-function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
+function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSpriteProps) {
   const position = grid.slotToPixel(plant.slot.x, plant.slot.y);
   if (!position) return null; // Out of bounds
 
@@ -462,6 +472,17 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
   // Safe check: ensure crops is an object (dictionary) before accessing
   const cropMeta = renderpack.crops?.crops?.[plant.crop];
   const hasCropSprite = cropMeta && cropMeta.file;
+
+  // Compute current growth stage based on time elapsed
+  const plantedAt = plant.plantedAt ?? nowSec; // Use now for optimistic plants
+  const computedStage = cropMeta
+    ? computeGrowthStage(plantedAt, nowSec, cropMeta)
+    : plant.stage; // Fallback to static stage if no metadata
+
+  // Compute seconds until next stage (for debug tooltip)
+  const secondsUntilNext = cropMeta
+    ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
+    : null;
 
   return (
     <div
@@ -480,7 +501,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
           className="w-full h-full"
           style={{
             backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
-            backgroundPosition: `-${plant.stage * tileSize}px 0px`,
+            backgroundPosition: `-${computedStage * tileSize}px 0px`,
             backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
             backgroundRepeat: 'no-repeat',
             imageRendering: 'pixelated',
@@ -490,7 +511,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
         // Placeholder: Simple colored square
         <div
           className="w-full h-full rounded border-2 border-green-600 bg-green-400 flex items-center justify-center text-xs font-bold"
-          title={`${plant.crop} (stage ${plant.stage})`}
+          title={`${plant.crop} (stage ${computedStage})`}
         >
           🌱
         </div>
@@ -505,8 +526,21 @@ function PlantSprite({ plant, grid, renderpack, showDebug }: PlantSpriteProps) {
       {showDebug && (
         <div className="absolute left-0 top-full mt-1 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
           <div>Crop: {plant.crop}</div>
-          <div>Stage: {plant.stage}</div>
+          <div>Stage: {computedStage} / {cropMeta?.stages ? cropMeta.stages - 1 : '?'}</div>
           <div>Slot: {plant.slot.x},{plant.slot.y}</div>
+          {plant.plantedAt && (
+            <>
+              <div>Planted: {new Date(plant.plantedAt * 1000).toLocaleTimeString()}</div>
+              <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
+              <div>Elapsed: {nowSec - plant.plantedAt}s</div>
+              {secondsUntilNext !== null && secondsUntilNext > 0 && (
+                <div className="text-green-400">Next stage: {secondsUntilNext}s</div>
+              )}
+              {secondsUntilNext === null && (
+                <div className="text-yellow-400">Ready to harvest!</div>
+              )}
+            </>
+          )}
           <div className="truncate max-w-[200px]">ID: {plant.id}</div>
           {isPending && <div className="text-yellow-400">Status: Pending</div>}
         </div>

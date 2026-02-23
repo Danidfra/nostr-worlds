@@ -140,6 +140,8 @@ export interface CropMetadata {
   stages: number;
   /** Stage index when crop is ready to harvest */
   harvestStage?: number;
+  /** Duration in seconds per growth stage (for time-based growth) */
+  stageDurationSec?: number;
 }
 
 /**
