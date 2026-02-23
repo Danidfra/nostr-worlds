@@ -2,12 +2,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useToast } from '@/hooks/useToast';
-import type { PlantState } from '@/lib/nostr/types';
+import type { SlotState } from '@/lib/nostr/types';
 
 /**
- * Optimistic plant marker (temporary until published)
+ * Optimistic slot marker (temporary until published)
  */
-export interface OptimisticPlant extends PlantState {
+export interface OptimisticSlot extends SlotState {
   __pending?: boolean;
 }
 
@@ -36,16 +36,16 @@ export function usePlantingActions() {
 
       const { worldId, mapId, slotX, slotY, cropId } = params;
 
-      // Generate unique plant ID
-      const plantId = `plant:${worldId}:${mapId.split(':').pop()}:${slotX}:${slotY}`;
+      // Generate unique slot ID
+      const slotId = `slot:${worldId}:${mapId.split(':').pop()}:${slotX}:${slotY}`;
       const now = Math.floor(Date.now() / 1000);
 
-      // Publish PlantState event
+      // Publish SlotState event (Kind 31417)
       await publishEvent({
         kind: 31417,
         content: '',
         tags: [
-          ['d', plantId],
+          ['d', slotId],
           ['v', '1'],
           ['world', worldId],
           ['map', mapId],
@@ -57,37 +57,38 @@ export function usePlantingActions() {
         ],
       });
 
-      return { plantId, worldId, mapId, slotX, slotY, cropId, now };
+      return { slotId, worldId, mapId, slotX, slotY, cropId, now };
     },
     onMutate: async (params) => {
       const { worldId, mapId, slotX, slotY, cropId } = params;
 
       // Cancel ongoing queries
       await queryClient.cancelQueries({
-        queryKey: ['plantstates', worldId, mapId],
+        queryKey: ['slotstates', worldId, mapId],
       });
 
-      // Get current plants
-      const previousPlants = queryClient.getQueryData<PlantState[]>([
-        'plantstates',
+      // Get current slots
+      const previousSlots = queryClient.getQueryData<SlotState[]>([
+        'slotstates',
         worldId,
         mapId,
       ]);
 
-      // Create optimistic plant
-      const plantId = `plant:${worldId}:${mapId.split(':').pop()}:${slotX}:${slotY}`;
+      // Create optimistic slot
+      const slotId = `slot:${worldId}:${mapId.split(':').pop()}:${slotX}:${slotY}`;
       const now = Math.floor(Date.now() / 1000);
       
-      const optimisticPlant: OptimisticPlant = {
+      const optimisticSlot: OptimisticSlot = {
         event: {
           id: '',
           pubkey: '',
           created_at: now,
           kind: 31417,
           tags: [],
+          content: '',
           sig: '',
         },
-        id: plantId,
+        id: slotId,
         version: '1',
         worldId,
         mapId,
@@ -98,21 +99,21 @@ export function usePlantingActions() {
         __pending: true,
       };
 
-      // Add optimistic plant to cache
-      queryClient.setQueryData<PlantState[]>(
-        ['plantstates', worldId, mapId],
-        (old) => [...(old || []), optimisticPlant]
+      // Add optimistic slot to cache
+      queryClient.setQueryData<SlotState[]>(
+        ['slotstates', worldId, mapId],
+        (old) => [...(old || []), optimisticSlot]
       );
 
       // Return context for rollback
-      return { previousPlants, worldId, mapId };
+      return { previousSlots, worldId, mapId };
     },
     onError: (error, _params, context) => {
       // Rollback on error
-      if (context?.previousPlants) {
+      if (context?.previousSlots) {
         queryClient.setQueryData(
-          ['plantstates', context.worldId, context.mapId],
-          context.previousPlants
+          ['slotstates', context.worldId, context.mapId],
+          context.previousSlots
         );
       }
 
@@ -126,7 +127,7 @@ export function usePlantingActions() {
       // Invalidate and refetch to get the real event
       if (context) {
         queryClient.invalidateQueries({
-          queryKey: ['plantstates', context.worldId, context.mapId],
+          queryKey: ['slotstates', context.worldId, context.mapId],
         });
       }
 

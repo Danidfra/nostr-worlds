@@ -9,7 +9,7 @@ The MVP implements a read-only viewer that:
 2. Allows opening/selecting a world
 3. Loads renderpack data via HTTP (manifest + layout)
 4. Renders the map background and computed planting grid
-5. Fetches and renders PlantState events on the grid
+5. Fetches and renders SlotState events on the grid
 6. Uses `relay.primal.net` as the default relay
 
 ## Prerequisites
@@ -70,12 +70,12 @@ nak event -k 31416 \
 
 **Note**: The `t` tag should match the world ID for discovery.
 
-### 3. Publish PlantState Events (Kind 31417)
+### 3. Publish SlotState Events (Kind 31417)
 
 ```bash
 # Plant a carrot at slot (3, 2)
 nak event -k 31417 \
-  --tag d plant:world:farm01:farm:3:2 \
+  --tag d slot:world:farm01:farm:3:2 \
   --tag v 1 \
   --tag world world:farm01 \
   --tag map map:world:farm01:farm \
@@ -89,7 +89,7 @@ nak event -k 31417 \
 
 # Plant a wheat at slot (5, 3)
 nak event -k 31417 \
-  --tag d plant:world:farm01:farm:5:3 \
+  --tag d slot:world:farm01:farm:5:3 \
   --tag v 1 \
   --tag world world:farm01 \
   --tag map map:world:farm01:farm \
@@ -103,7 +103,7 @@ nak event -k 31417 \
 
 # Plant a tomato at slot (7, 4)
 nak event -k 31417 \
-  --tag d plant:world:farm01:farm:7:4 \
+  --tag d slot:world:farm01:farm:7:4 \
   --tag v 1 \
   --tag world world:farm01 \
   --tag map map:world:farm01:farm \
@@ -167,12 +167,12 @@ nak event -k 31416 \
 # Wait a moment
 sleep 1
 
-# Publish some plants
-echo "Publishing PlantStates..."
+# Publish some slots with plants
+echo "Publishing SlotStates..."
 for slot in "3 2 carrot 2" "5 3 wheat 1" "7 4 tomato 3" "2 5 corn 0" "9 1 potato 2"; do
   read -r x y crop stage <<< "$slot"
   nak event -k 31417 \
-    --tag d "plant:world:farm01:farm:$x:$y" \
+    --tag d "slot:world:farm01:farm:$x:$y" \
     --tag v 1 \
     --tag world world:farm01 \
     --tag map map:world:farm01:farm \
@@ -251,11 +251,11 @@ When debug mode is enabled (Eye icon):
   - Background: `{renderpack_url}/{layout.background}`
 
 ### Plants not showing
-- Ensure PlantState events are published with the correct world and map IDs
+- Ensure SlotState events are published with the correct world and map IDs
 - Check that slot coordinates are within the grid bounds (0-based)
 - Verify the discovery tag `t` matches the world ID
 - **Check browser console** for debug logs:
-  - Look for `[usePlantStates] Fetched: X, Parsed: Y, Matched: Z`
+  - Look for `[useSlotStates] Fetched: X, Parsed: Y, Matched: Z`
   - If `Fetched > 0` but `Parsed = 0`: Check slot tag format (must be `["slot", "3", "2"]` or `["slot", "3:2"]`)
   - If `Parsed > 0` but `Matched = 0`: Verify world and map IDs match exactly
 - **Slot tag format**: The parser supports both formats:

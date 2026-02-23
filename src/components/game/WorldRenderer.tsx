@@ -3,9 +3,9 @@ import { useGameContext } from '@/contexts/GameContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useWorldStates } from '@/hooks/useWorldStates';
 import { useMapStates } from '@/hooks/useMapStates';
-import { usePlantStates } from '@/hooks/usePlantStates';
+import { useSlotStates } from '@/hooks/useSlotStates';
 import { useRenderpack, resolveRenderpackConfig } from '@/hooks/useRenderpack';
-import { usePlantingActions, type OptimisticPlant } from '@/hooks/usePlantingActions';
+import { usePlantingActions, type OptimisticSlot } from '@/hooks/usePlantingActions';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { computeGrid } from '@/lib/renderer/grid';
 import { computeGrowthStage, computeSecondsUntilNextStage } from '@/lib/game/growth';
@@ -16,7 +16,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { WorldPicker } from './WorldPicker';
 import { InteractiveGridLayer } from './InteractiveGridLayer';
 import { SeedSelectDialog } from './SeedSelectDialog';
-import type { PlantState } from '@/lib/nostr/types';
+import type { SlotState } from '@/lib/nostr/types';
 
 /**
  * WorldRenderer - Renders the game world with background, grid, and plants
@@ -26,8 +26,8 @@ import type { PlantState } from '@/lib/nostr/types';
  * 2. Fetch WorldState for worldId
  * 3. Fetch MapState for worldId (with entryMap preference)
  * 4. Fetch Renderpack (manifest + layout) using resolved URLs
- * 5. Fetch PlantStates for worldId + mapId
- * 6. Render background, grid overlay, and plant sprites
+ * 5. Fetch SlotStates for worldId + mapId
+ * 6. Render background, grid overlay, and slot sprites
  */
 export function WorldRenderer() {
   const { currentWorldId } = useGameContext();
@@ -64,8 +64,8 @@ export function WorldRenderer() {
     error: renderpackError,
   } = useRenderpack(renderpackConfig?.renderpackUrl, renderpackConfig?.layoutId);
 
-  // Query PlantStates
-  const { data: plants, isLoading: isPlantsLoading } = usePlantStates(
+  // Query SlotStates
+  const { data: slots, isLoading: isSlotsLoading } = useSlotStates(
     world?.id,
     mapState?.id
   );
@@ -163,8 +163,8 @@ export function WorldRenderer() {
       backgroundUrl={renderpack.backgroundUrl}
       layoutName={renderpack.layout.name}
       grid={grid}
-      plants={plants}
-      isPlantsLoading={isPlantsLoading}
+      slots={slots}
+      isSlotsLoading={isSlotsLoading}
       renderpack={renderpack}
       showDebugGrid={showDebugGrid}
       onToggleDebug={() => setShowDebugGrid(!showDebugGrid)}
@@ -182,14 +182,14 @@ export function WorldRenderer() {
  * 1. Use object-fit: contain to scale background image responsively
  * 2. Measure the rendered image size using ResizeObserver
  * 3. Compute scale factor and offset to align overlays
- * 4. Render overlays (grid, plants) in a scaled container
+ * 4. Render overlays (grid, slots) in a scaled container
  */
 interface ResponsiveWorldViewProps {
   backgroundUrl: string;
   layoutName: string;
   grid: ReturnType<typeof computeGrid>;
-  plants?: PlantState[];
-  isPlantsLoading: boolean;
+  slots?: SlotState[];
+  isSlotsLoading: boolean;
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebugGrid: boolean;
   onToggleDebug: () => void;
@@ -202,8 +202,8 @@ function ResponsiveWorldView({
   backgroundUrl,
   layoutName,
   grid,
-  plants,
-  isPlantsLoading,
+  slots,
+  isSlotsLoading,
   renderpack,
   showDebugGrid,
   onToggleDebug,
@@ -395,19 +395,19 @@ function ResponsiveWorldView({
               </svg>
             )}
 
-            {/* Plants Layer */}
-            {isPlantsLoading ? (
+            {/* Slots Layer */}
+            {isSlotsLoading ? (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-auto">
                 <div className="bg-white/90 dark:bg-black/90 backdrop-blur-sm rounded-lg px-4 py-2">
-                  <p className="text-sm text-muted-foreground">Loading plants...</p>
+                  <p className="text-sm text-muted-foreground">Loading slots...</p>
                 </div>
               </div>
             ) : (
               <div className="absolute inset-0">
-                {plants?.map((plant) => (
-                  <PlantSprite
-                    key={plant.id}
-                    plant={plant}
+                {slots?.map((slot) => (
+                  <SlotSprite
+                    key={slot.id}
+                    slot={slot}
                     grid={grid}
                     renderpack={renderpack}
                     showDebug={showDebugGrid}
@@ -418,7 +418,7 @@ function ResponsiveWorldView({
             )}
 
             {/* Interactive Grid Layer - hover + click */}
-            {!isPlantsLoading && (
+            {!isSlotsLoading && (
               <InteractiveGridLayer
                 naturalWidth={naturalSize.width}
                 naturalHeight={naturalSize.height}
@@ -426,7 +426,7 @@ function ResponsiveWorldView({
                 offsetY={offsetY}
                 scale={scale}
                 grid={grid}
-                plants={plants || []}
+                slots={slots || []}
                 onTileClick={handleTileClick}
               />
             )}
@@ -448,44 +448,47 @@ function ResponsiveWorldView({
 }
 
 /**
- * Render a single plant sprite with time-based growth
+ * Render a single slot sprite with time-based growth
+ * 
+ * Note: Currently renders plant sprites, but will be generalized
+ * to support multiple entity types in the future.
  */
-interface PlantSpriteProps {
-  plant: PlantState | OptimisticPlant;
+interface SlotSpriteProps {
+  slot: SlotState | OptimisticSlot;
   grid: ReturnType<typeof computeGrid>;
   renderpack: NonNullable<ReturnType<typeof useRenderpack>['data']>;
   showDebug: boolean;
   nowSec: number;
 }
 
-function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSpriteProps) {
-  const position = grid.slotToPixel(plant.slot.x, plant.slot.y);
+function SlotSprite({ slot, grid, renderpack, showDebug, nowSec }: SlotSpriteProps) {
+  const position = grid.slotToPixel(slot.slot.x, slot.slot.y);
   if (!position) return null; // Out of bounds
 
   const { px, py } = position;
   const tileSize = grid.tileSize;
 
-  // Check if this is an optimistic (pending) plant
-  const isPending = '__pending' in plant && plant.__pending;
+  // Check if this is an optimistic (pending) slot
+  const isPending = '__pending' in slot && slot.__pending;
 
   // Try to load crop metadata from dictionary
   // Safe check: ensure crops is an object (dictionary) before accessing
-  const cropMeta = renderpack.crops?.crops?.[plant.crop];
+  const cropMeta = renderpack.crops?.crops?.[slot.crop];
   const hasCropSprite = cropMeta && cropMeta.file;
 
   // Safe plantedAt with triple fallback (should never be undefined)
-  // 1. Use plant.plantedAt (authoritative)
+  // 1. Use slot.plantedAt (authoritative)
   // 2. Fallback to event.created_at (for legacy events)
   // 3. Fallback to nowSec (last resort - should never happen)
-  const plantedAt = plant.plantedAt ?? plant.event?.created_at ?? nowSec;
+  const plantedAt = slot.plantedAt ?? slot.event?.created_at ?? nowSec;
 
   // Development assertion - warn if we're using fallback
   if (process.env.NODE_ENV === 'development') {
-    if (!plant.plantedAt) {
-      console.warn('[PlantSprite] Missing plantedAt, using fallback:', {
-        plantId: plant.id,
-        eventId: plant.event?.id,
-        eventCreatedAt: plant.event?.created_at,
+    if (!slot.plantedAt) {
+      console.warn('[SlotSprite] Missing plantedAt, using fallback:', {
+        slotId: slot.id,
+        eventId: slot.event?.id,
+        eventCreatedAt: slot.event?.created_at,
         fallbackUsed: plantedAt,
       });
     }
@@ -493,7 +496,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
 
   // Compute current growth stage based on time elapsed
   // ALWAYS use computeGrowthStage when crop metadata is available
-  // plant.stage is LEGACY data and NEVER used for rendering
+  // slot.stage is LEGACY data and NEVER used for rendering
   const computedStage = cropMeta
     ? computeGrowthStage(plantedAt, nowSec, cropMeta)
     : 0; // Fallback to seed stage if no metadata
@@ -511,7 +514,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
         top: py,
         width: tileSize,
         height: tileSize,
-        opacity: isPending ? 0.6 : 1, // Reduced opacity for pending plants
+        opacity: isPending ? 0.6 : 1, // Reduced opacity for pending slots
       }}
     >
       {/* Render sprite if available, otherwise placeholder */}
@@ -530,7 +533,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
         // Placeholder: Simple colored square
         <div
           className="w-full h-full rounded border-2 border-green-600 bg-green-400 flex items-center justify-center text-xs font-bold"
-          title={`${plant.crop} (stage ${computedStage})`}
+          title={`${slot.crop} (stage ${computedStage})`}
         >
           🌱
         </div>
@@ -544,9 +547,9 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
       {/* Debug Info on Hover */}
       {showDebug && (
         <div className="absolute left-0 top-full mt-1 bg-black/90 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
-          <div>Crop: {plant.crop}</div>
+          <div>Crop: {slot.crop}</div>
           <div>Stage: {computedStage} / {cropMeta?.stages ? cropMeta.stages - 1 : '?'}</div>
-          <div>Slot: {plant.slot.x},{plant.slot.y}</div>
+          <div>Slot: {slot.slot.x},{slot.slot.y}</div>
           <div>Planted: {new Date(plantedAt * 1000).toLocaleTimeString()}</div>
           <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
           <div>Elapsed: {nowSec - plantedAt}s</div>
@@ -556,7 +559,7 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
           {secondsUntilNext === null && (
             <div className="text-yellow-400">Ready to harvest!</div>
           )}
-          <div className="truncate max-w-[200px]">ID: {plant.id}</div>
+          <div className="truncate max-w-[200px]">ID: {slot.id}</div>
           {isPending && <div className="text-yellow-400">Status: Pending</div>}
         </div>
       )}

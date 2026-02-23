@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { clientToSlot } from '@/lib/renderer/coordinates';
 import type { ComputedGrid } from '@/lib/renderer/grid';
-import type { PlantState } from '@/lib/nostr/types';
-import type { OptimisticPlant } from '@/hooks/usePlantingActions';
+import type { SlotState } from '@/lib/nostr/types';
+import type { OptimisticSlot } from '@/hooks/usePlantingActions';
 
 interface InteractiveGridLayerProps {
   naturalWidth: number;
@@ -11,7 +11,7 @@ interface InteractiveGridLayerProps {
   offsetY: number;
   scale: number;
   grid: ComputedGrid;
-  plants: (PlantState | OptimisticPlant)[];
+  slots: (SlotState | OptimisticSlot)[];
   onTileClick: (slotX: number, slotY: number) => void;
 }
 
@@ -30,7 +30,7 @@ export function InteractiveGridLayer({
   offsetY,
   scale,
   grid,
-  plants,
+  slots,
   onTileClick,
 }: InteractiveGridLayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,7 +51,7 @@ export function InteractiveGridLayer({
     );
 
     // Only hover empty slots
-    if (slot && !isSlotOccupied(slot.x, slot.y, plants)) {
+    if (slot && !isSlotOccupied(slot.x, slot.y, slots)) {
       setHoveredSlot(slot);
     } else {
       setHoveredSlot(null);
@@ -78,7 +78,7 @@ export function InteractiveGridLayer({
     );
 
     // Only allow clicking empty slots
-    if (slot && !isSlotOccupied(slot.x, slot.y, plants)) {
+    if (slot && !isSlotOccupied(slot.x, slot.y, slots)) {
       onTileClick(slot.x, slot.y);
     }
   };
@@ -119,12 +119,12 @@ export function InteractiveGridLayer({
 }
 
 /**
- * Check if a slot is occupied by a plant
+ * Check if a slot is occupied
  */
 function isSlotOccupied(
   slotX: number,
   slotY: number,
-  plants: (PlantState | OptimisticPlant)[]
+  slots: (SlotState | OptimisticSlot)[]
 ): boolean {
-  return plants.some((plant) => plant.slot.x === slotX && plant.slot.y === slotY);
+  return slots.some((slot) => slot.slot.x === slotX && slot.slot.y === slotY);
 }

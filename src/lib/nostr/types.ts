@@ -47,18 +47,24 @@ export interface MapState {
 }
 
 /**
- * PlantState (Kind 31417)
- * Represents a single plant instance on a map
+ * SlotState (Kind 31417)
+ * Represents the current state of a single grid slot on a map
+ * 
+ * A SlotState can contain various entity types (plants, rocks, decorations, etc.).
+ * The d tag is interpreted as a slot identifier, not a plant-specific identifier.
  * 
  * GROWTH MODEL: Time-based (Route A)
  * - Growth stage is computed from (plantedAt, nowSec, cropMeta.stageDurationSec)
  * - The 'stage' field is LEGACY and should NOT be used for rendering
  * - Rendering must always use computeGrowthStage() when crop metadata exists
+ * 
+ * NOTE: Currently contains plant-specific fields (crop, plantedAt, etc.) for backward compatibility.
+ * Future versions will generalize these fields to support multiple entity types.
  */
-export interface PlantState {
+export interface SlotState {
   /** Event object */
   event: NostrEvent;
-  /** Plant identifier (d tag) */
+  /** Slot identifier (d tag) - format: slot:world:<worldId>:<mapId>:<x>:<y> */
   id: string;
   /** Schema version */
   version: string;
@@ -71,6 +77,8 @@ export interface PlantState {
     x: number;
     y: number;
   };
+  
+  // Temporary plant-specific fields (will be generalized later)
   /** Crop identifier */
   crop: string;
   /** Growth stage (0-based index) - LEGACY: Stage is now computed from time, not stored */
@@ -87,6 +95,10 @@ export interface PlantState {
   regrowAt?: number;
   /** Optional: Expiration timestamp */
   expiresAt?: number;
+  
+  // Future-proof: Entity type discrimination
+  /** Optional: Slot entity type (plant, empty, rock, decoration, etc.) */
+  type?: 'plant' | 'empty' | string;
 }
 
 /**

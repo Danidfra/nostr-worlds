@@ -1,5 +1,5 @@
 import type { NostrEvent } from '@nostrify/nostrify';
-import type { WorldState, MapState, PlantState } from './types';
+import type { WorldState, MapState, SlotState } from './types';
 
 /**
  * Get a tag value by name
@@ -84,9 +84,12 @@ export function parseMapState(event: NostrEvent): MapState | null {
 }
 
 /**
- * Parse a PlantState event (kind 31417)
+ * Parse a SlotState event (kind 31417)
+ * 
+ * Parses an addressable event representing the state of a grid slot.
+ * Currently supports plant-specific fields for backward compatibility.
  */
-export function parsePlantState(event: NostrEvent): PlantState | null {
+export function parseSlotState(event: NostrEvent): SlotState | null {
   if (event.kind !== 31417) return null;
 
   // Required tags
@@ -187,8 +190,8 @@ export function validateMapState(event: NostrEvent): boolean {
 }
 
 /**
- * Validate PlantState events
+ * Validate SlotState events
  */
-export function validatePlantState(event: NostrEvent): boolean {
-  return parsePlantState(event) !== null;
+export function validateSlotState(event: NostrEvent): boolean {
+  return parseSlotState(event) !== null;
 }

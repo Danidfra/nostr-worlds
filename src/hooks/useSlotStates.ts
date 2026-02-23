@@ -1,24 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
-import { parsePlantState } from '@/lib/nostr/tags';
-import type { PlantState } from '@/lib/nostr/types';
+import { parseSlotState } from '@/lib/nostr/tags';
+import type { SlotState } from '@/lib/nostr/types';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 
 /**
- * Query PlantState events (kind 31417) for a specific world and map
+ * Query SlotState events (kind 31417) for a specific world and map
  * 
  * Per spec: Uses discovery tag (t) for efficient relay filtering,
  * then filters by world and map tags for final results.
  * 
  * @param worldId - World identifier
  * @param mapId - Map identifier (d tag from MapState)
- * @returns Query result with PlantState array
+ * @returns Query result with SlotState array
  */
-export function usePlantStates(worldId?: string, mapId?: string) {
+export function useSlotStates(worldId?: string, mapId?: string) {
   const { nostr } = useNostr();
 
   return useQuery({
-    queryKey: ['plantstates', worldId, mapId],
+    queryKey: ['slotstates', worldId, mapId],
     queryFn: async () => {
       if (!worldId || !mapId) return [];
 
@@ -29,21 +29,21 @@ export function usePlantStates(worldId?: string, mapId?: string) {
         {
           kinds: [31417],
           '#t': [worldId], // Discovery tag for efficient relay filtering
-          limit: 500, // Allow for larger farms
+          limit: 500, // Allow for large grids
         },
       ]);
 
       // Parse and filter by world and map
-      const plants: PlantState[] = [];
+      const slots: SlotState[] = [];
       let parsedCount = 0;
       let filteredCount = 0;
 
       for (const event of events) {
-        const plant = parsePlantState(event);
-        if (plant) {
+        const slot = parseSlotState(event);
+        if (slot) {
           parsedCount++;
-          if (plant.worldId === worldId && plant.mapId === mapId) {
-            plants.push(plant);
+          if (slot.worldId === worldId && slot.mapId === mapId) {
+            slots.push(slot);
             filteredCount++;
           }
         }
@@ -51,11 +51,11 @@ export function usePlantStates(worldId?: string, mapId?: string) {
 
       // Debug logging
       console.debug(
-        `[usePlantStates] Fetched: ${events.length}, Parsed: ${parsedCount}, Matched: ${filteredCount}`,
+        `[useSlotStates] Fetched: ${events.length}, Parsed: ${parsedCount}, Matched: ${filteredCount}`,
         { worldId, mapId }
       );
 
-      return plants;
+      return slots;
     },
     enabled: !!worldId && !!mapId,
   });
