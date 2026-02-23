@@ -474,14 +474,15 @@ function PlantSprite({ plant, grid, renderpack, showDebug, nowSec }: PlantSprite
   const hasCropSprite = cropMeta && cropMeta.file;
 
   // Compute current growth stage based on time elapsed
-  const plantedAt = plant.plantedAt ?? nowSec; // Use now for optimistic plants
+  // Always use computeGrowthStage when crop metadata is available
+  // plant.stage is legacy data and should not be trusted for rendering
   const computedStage = cropMeta
-    ? computeGrowthStage(plantedAt, nowSec, cropMeta)
-    : plant.stage; // Fallback to static stage if no metadata
+    ? computeGrowthStage(plant.plantedAt, nowSec, cropMeta)
+    : 0; // Fallback to seed stage if no metadata
 
   // Compute seconds until next stage (for debug tooltip)
   const secondsUntilNext = cropMeta
-    ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
+    ? computeSecondsUntilNextStage(plant.plantedAt, nowSec, cropMeta, computedStage)
     : null;
 
   return (

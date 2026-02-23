@@ -95,6 +95,8 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
   const worldId = getTag(event, 'world');
   const mapId = getTag(event, 'map');
   const crop = getTag(event, 'crop');
+  
+  // Optional stage tag (legacy - stage is now computed from time)
   const stageStr = getTag(event, 'stage');
 
   // Parse slot tag - supports both formats:
@@ -119,8 +121,8 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
     }
   }
 
-  // Validate required tags
-  if (!d || !v || !worldId || !mapId || !slotX || !slotY || !crop || stageStr === undefined) {
+  // Validate required tags (stage is now optional)
+  if (!d || !v || !worldId || !mapId || !slotX || !slotY || !crop) {
     return null;
   }
 
@@ -131,16 +133,23 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
     return null;
   }
 
-  const stage = parseInt(stageStr, 10);
+  // Parse stage (optional - defaults to 0 if missing)
+  const stage = stageStr ? parseInt(stageStr, 10) : 0;
   if (!Number.isFinite(stage)) return null;
 
-  // Optional timing tags
+  // Timing tags
   const plantedAtStr = getTag(event, 'planted_at');
   const readyAtStr = getTag(event, 'ready_at');
   const harvestCountStr = getTag(event, 'harvest_count');
   const harvestMaxStr = getTag(event, 'harvest_max');
   const regrowAtStr = getTag(event, 'regrow_at');
   const expiresAtStr = getTag(event, 'expires_at');
+
+  // Parse planted_at with fallback to event.created_at
+  // This ensures all plants have a valid timestamp for growth computation
+  const plantedAt = plantedAtStr
+    ? parseInt(plantedAtStr, 10)
+    : event.created_at;
 
   return {
     event,
@@ -153,8 +162,8 @@ export function parsePlantState(event: NostrEvent): PlantState | null {
       y,
     },
     crop,
-    stage,
-    plantedAt: plantedAtStr ? parseInt(plantedAtStr, 10) : undefined,
+    stage, // Legacy field - rendering uses computed stage from time
+    plantedAt, // Required for time-based growth (fallback to created_at)
     readyAt: readyAtStr ? parseInt(readyAtStr, 10) : undefined,
     harvestCount: harvestCountStr ? parseInt(harvestCountStr, 10) : undefined,
     harvestMax: harvestMaxStr ? parseInt(harvestMaxStr, 10) : undefined,

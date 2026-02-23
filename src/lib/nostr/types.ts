@@ -68,10 +68,10 @@ export interface PlantState {
   };
   /** Crop identifier */
   crop: string;
-  /** Growth stage (0-based index) */
+  /** Growth stage (0-based index) - LEGACY: Stage is now computed from time, not stored */
   stage: number;
-  /** Optional: Planting timestamp */
-  plantedAt?: number;
+  /** Planting timestamp - Used for time-based growth computation */
+  plantedAt: number;
   /** Optional: Ready-to-harvest timestamp */
   readyAt?: number;
   /** Optional: Harvest count */

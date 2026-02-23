@@ -3,16 +3,14 @@ import type { ComputedGrid } from './grid';
 /**
  * Convert mouse/pointer coordinates to grid slot
  * 
- * IMPORTANT: This function should be called from the InteractiveGridLayer
- * which is already positioned inside the scaled overlay container.
- * The containerRef should be the InteractiveGridLayer itself, NOT the outer container.
- * Therefore, we do NOT subtract offsetX/offsetY here (already handled by container positioning).
+ * IMPORTANT: This function is called from InteractiveGridLayer which is already
+ * positioned inside the scaled overlay container. The containerRef is the layer itself.
  * 
  * @param clientX - Mouse X position (from event)
  * @param clientY - Mouse Y position (from event)
- * @param containerRef - Reference to the InteractiveGridLayer element (already offset)
- * @param offsetX - UNUSED (kept for API compatibility, should be 0)
- * @param offsetY - UNUSED (kept for API compatibility, should be 0)
+ * @param containerRef - Reference to the InteractiveGridLayer element
+ * @param _offsetX - DEPRECATED: Not used (container is already offset)
+ * @param _offsetY - DEPRECATED: Not used (container is already offset)
  * @param scale - Scale factor applied to the image
  * @param grid - Computed grid data
  * @returns Grid slot {x, y} or null if outside grid
@@ -21,8 +19,8 @@ export function clientToSlot(
   clientX: number,
   clientY: number,
   containerRef: HTMLElement,
-  offsetX: number,
-  offsetY: number,
+  _offsetX: number,
+  _offsetY: number,
   scale: number,
   grid: ComputedGrid
 ): { x: number; y: number } | null {
