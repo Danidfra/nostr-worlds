@@ -24,12 +24,42 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, Partial<
         tags.push(["client", location.hostname]);
       }
 
-      // Sign the event once
+      // Harden created_at timestamp
+      const now = Math.floor(Date.now() / 1000);
+      const providedTimestamp = t.created_at;
+      let finalTimestamp = providedTimestamp ?? now;
+
+      // Clamp timestamps that are more than 5 minutes in the future
+      const maxFutureOffset = 5 * 60; // 5 minutes in seconds
+      if (finalTimestamp > now + maxFutureOffset) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('[useNostrPublish] Timestamp clamping:', {
+            provided: providedTimestamp,
+            now,
+            diff: finalTimestamp - now,
+            clamped: now,
+            reason: 'Timestamp was more than 5 minutes in the future',
+          });
+        }
+        finalTimestamp = now;
+      }
+
+      // Development logging for timestamp debugging
+      if (process.env.NODE_ENV === 'development' && providedTimestamp !== undefined) {
+        console.debug('[useNostrPublish] Timestamp validation:', {
+          original: providedTimestamp,
+          final: finalTimestamp,
+          now,
+          delta: finalTimestamp - now,
+        });
+      }
+
+      // Sign the event once with validated timestamp
       const event = await user.signer.signEvent({
         kind: t.kind!,
         content: t.content ?? "",
         tags,
-        created_at: t.created_at ?? Math.floor(Date.now() / 1000),
+        created_at: finalTimestamp,
       });
 
       // Publish to configured relays with detailed error handling
