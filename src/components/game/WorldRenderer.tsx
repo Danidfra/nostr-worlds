@@ -34,6 +34,9 @@ export function WorldRenderer() {
   const { user } = useCurrentUser();
   const [showDebugGrid, setShowDebugGrid] = useState(false);
 
+  // Live timestamp for time-based growth (MUST be called before any returns)
+  const nowSec = useNowSeconds(2000);
+
   // Query WorldState
   const { data: worlds } = useWorldStates(user?.pubkey);
   const world = worlds?.find((w) => w.id === currentWorldId);
@@ -153,9 +156,6 @@ export function WorldRenderer() {
 
   // Compute grid (in natural layout pixel coordinates)
   const grid = computeGrid(renderpack.layout);
-
-  // Live timestamp for time-based growth (updates every 2 seconds)
-  const nowSec = useNowSeconds(2000);
 
   // Render world with responsive scaling
   return (
