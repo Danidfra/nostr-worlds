@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGameContext } from '@/contexts/GameContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -594,6 +594,56 @@ function formatTimeRemaining(seconds: number): string {
 }
 
 /**
+ * Hook to validate if an image URL can be loaded
+ * Returns true if image loads successfully, false if it fails
+ */
+function useImageLoaded(url: string | undefined): boolean {
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!url) {
+      setLoaded(false);
+      return;
+    }
+
+    const img = new Image();
+    
+    img.onload = () => {
+      setLoaded(true);
+    };
+    
+    img.onerror = () => {
+      console.warn('[SlotSprite] Failed to load image:', url);
+      setLoaded(false);
+    };
+    
+    img.src = url;
+
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [url]);
+
+  return loaded;
+}
+
+/**
+ * Normalize rottenFile path to be consistent with crop sprite paths
+ * Handles both "crops/..." and "assets/crops/..." formats
+ */
+function normalizeRottenPath(rottenFile: string | undefined): string | undefined {
+  if (!rottenFile) return undefined;
+  
+  // If path doesn't start with "assets/", add it for consistency
+  if (!rottenFile.startsWith('assets/')) {
+    return `assets/${rottenFile}`;
+  }
+  
+  return rottenFile;
+}
+
+/**
  * Render a single slot sprite with time-based growth
  * 
  * Note: Currently renders plant sprites, but will be generalized
@@ -609,6 +659,28 @@ interface SlotSpriteProps {
 }
 
 function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: SlotSpriteProps) {
+  // Try to load crop metadata from dictionary (do this BEFORE any early returns)
+  // Safe check: ensure crops is an object (dictionary) before accessing
+  const cropMeta = renderpack.crops?.crops?.[slot.crop ?? ''];
+  
+  // Normalize and build rotten sprite URL (MUST be before early returns for hooks rules)
+  const normalizedRottenPath = useMemo(
+    () => normalizeRottenPath(cropMeta?.rottenFile),
+    [cropMeta?.rottenFile]
+  );
+  const rottenSpriteUrl = normalizedRottenPath 
+    ? `${renderpack.renderpackUrl}/${normalizedRottenPath}`
+    : undefined;
+
+  // Check if plant is rotten/expired (needed for determining if we should preload rotten image)
+  const plantIsRotten = isRotten(slot, nowSec);
+
+  // Validate if rotten image can be loaded (MUST be before early returns for hooks rules)
+  const rottenImageLoaded = useImageLoaded(
+    plantIsRotten && rottenSpriteUrl ? rottenSpriteUrl : undefined
+  );
+
+  // Now safe to do early returns after all hooks are called
   const position = grid.slotToPixel(slot.slot.x, slot.slot.y);
   if (!position) return null; // Out of bounds
 
@@ -623,9 +695,6 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     return null;
   }
 
-  // Try to load crop metadata from dictionary
-  // Safe check: ensure crops is an object (dictionary) before accessing
-  const cropMeta = renderpack.crops?.crops?.[slot.crop];
   const hasCropSprite = cropMeta && cropMeta.file;
 
   // Safe plantedAt with triple fallback (should never be undefined)
@@ -660,11 +729,11 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
   // Check if plant needs watering
   const plantsNeedsWater = cropMeta ? needsWater(plantedAt, slot.waterCount, nowSec, cropMeta) : false;
 
-  // Check if plant is rotten/expired
-  const plantIsRotten = isRotten(slot, nowSec);
-
   // Determine if plant is ready to harvest
   const ready = cropMeta && !plantIsRotten ? isHarvestableSlot(slot, nowSec, cropMeta) : false;
+
+  // Decide whether to use rotten sprite or fallback
+  const useRottenSprite = plantIsRotten && rottenSpriteUrl && rottenImageLoaded;
 
   return (
     <div
@@ -680,12 +749,12 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
       {/* Render sprite if available, otherwise placeholder */}
       {hasCropSprite && cropMeta ? (
         <>
-          {plantIsRotten && cropMeta.rottenFile ? (
-            // Use dedicated rotten sprite if available
+          {useRottenSprite ? (
+            // Use dedicated rotten sprite (validated and loaded)
             <div
               className="w-full h-full transition-transform duration-200"
               style={{
-                backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.rottenFile})`,
+                backgroundImage: `url(${rottenSpriteUrl})`,
                 backgroundSize: `${tileSize}px ${tileSize}px`,
                 backgroundRepeat: 'no-repeat',
                 imageRendering: 'pixelated',
