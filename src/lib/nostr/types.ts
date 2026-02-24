@@ -89,6 +89,8 @@ export interface SlotState {
   plantedAt?: number;
   /** Last watering timestamp - Required for stage progression */
   wateredAt?: number;
+  /** Water count - Number of times plant has been watered */
+  waterCount?: number;
   /** Ready-to-harvest timestamp - Set when plant reaches final stage */
   readyAt?: number;
   /** Expiration timestamp - When plant becomes rotten (readyAt + grace period) */
@@ -167,6 +169,8 @@ export interface CropMetadata {
   harvestStage?: number;
   /** Duration in seconds per growth stage (for time-based growth) */
   stageDurationSec?: number;
+  /** Rotten sprite filename (relative to renderpack) */
+  rottenFile?: string;
 }
 
 /**

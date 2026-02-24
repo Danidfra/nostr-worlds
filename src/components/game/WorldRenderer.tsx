@@ -12,7 +12,7 @@ import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
-import { computeGrowthStage, computeGrowthStageWithWater, computeSecondsUntilNextStage, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
+import { computeGrowthStageWithWater, computeSecondsUntilNextStage, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -222,7 +222,7 @@ function ResponsiveWorldView({
   
   // Enable host action processor (processes SlotAction events in background)
   // Use the same relay for reading actions and publishing SlotState
-  useSlotActionProcessor(worldId, DEFAULT_GAME_RELAY, true);
+  useSlotActionProcessor(worldId, DEFAULT_GAME_RELAY, renderpack?.crops, true);
   
   // Track natural image size and rendered size
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
@@ -680,24 +680,40 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
       {/* Render sprite if available, otherwise placeholder */}
       {hasCropSprite && cropMeta ? (
         <>
-          <div
-            className="w-full h-full transition-transform duration-200"
-            style={{
-              backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
-              backgroundPosition: `-${computedStage * tileSize}px 0px`,
-              backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
-              backgroundRepeat: 'no-repeat',
-              imageRendering: 'pixelated',
-              filter: ready && isHovered ? 'brightness(1.1)' : plantIsRotten ? 'grayscale(1) brightness(0.7)' : undefined,
-              transform: ready && isHovered ? 'scale(1.05)' : undefined,
-            }}
-          />
-          
-          {/* Rotten overlay tint */}
-          {plantIsRotten && (
+          {plantIsRotten && cropMeta.rottenFile ? (
+            // Use dedicated rotten sprite if available
             <div
-              className="absolute inset-0 bg-red-900/40 rounded-sm pointer-events-none"
+              className="w-full h-full transition-transform duration-200"
+              style={{
+                backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.rottenFile})`,
+                backgroundSize: `${tileSize}px ${tileSize}px`,
+                backgroundRepeat: 'no-repeat',
+                imageRendering: 'pixelated',
+              }}
             />
+          ) : (
+            // Use normal spritesheet with visual effects
+            <>
+              <div
+                className="w-full h-full transition-transform duration-200"
+                style={{
+                  backgroundImage: `url(${renderpack.renderpackUrl}/${cropMeta.file})`,
+                  backgroundPosition: `-${computedStage * tileSize}px 0px`,
+                  backgroundSize: `${cropMeta.stages * tileSize}px ${tileSize}px`,
+                  backgroundRepeat: 'no-repeat',
+                  imageRendering: 'pixelated',
+                  filter: ready && isHovered ? 'brightness(1.1)' : plantIsRotten ? 'grayscale(1) brightness(0.7)' : undefined,
+                  transform: ready && isHovered ? 'scale(1.05)' : undefined,
+                }}
+              />
+              
+              {/* Rotten overlay tint (only if no rottenFile) */}
+              {plantIsRotten && (
+                <div
+                  className="absolute inset-0 bg-red-900/40 rounded-sm pointer-events-none"
+                />
+              )}
+            </>
           )}
         </>
       ) : (

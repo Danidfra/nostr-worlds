@@ -161,6 +161,7 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
   const stageStr = getTag(event, 'stage');
   const plantedAtStr = getTag(event, 'planted_at');
   const wateredAtStr = getTag(event, 'watered_at');
+  const waterCountStr = getTag(event, 'water_count');
   const readyAtStr = getTag(event, 'ready_at');
   const expiresAtStr = getTag(event, 'expires_at');
   const status = getTag(event, 'status');
@@ -188,6 +189,7 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     stage,
     plantedAt,
     wateredAt: wateredAtStr ? parseInt(wateredAtStr, 10) : undefined,
+    waterCount: waterCountStr ? parseInt(waterCountStr, 10) : undefined,
     readyAt: readyAtStr ? parseInt(readyAtStr, 10) : undefined,
     expiresAt: expiresAtStr ? parseInt(expiresAtStr, 10) : undefined,
     status: status as 'healthy' | 'rotten' | undefined,

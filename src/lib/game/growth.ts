@@ -9,8 +9,53 @@ const DEFAULT_STAGE_DURATION_SEC = 300;
 /**
  * Expiration grace period in seconds (1 hour)
  * Time after reaching harvest stage before plant becomes rotten
+ * @deprecated Use computeExpirationTime() instead for dynamic expiration
  */
 export const EXPIRATION_GRACE_PERIOD_SEC = 3600;
+
+/**
+ * Compute when a plant expires (becomes rotten)
+ * 
+ * Expiration time = readyAt + total growth time
+ * This means crops expire 2× their growth time from planting.
+ * 
+ * Examples:
+ * - 5 min grow → ready at 5 min → expires at 10 min
+ * - 30 min grow → ready at 30 min → expires at 60 min
+ * 
+ * @param plantedAtSec - Unix timestamp when plant was planted
+ * @param readyAtSec - Unix timestamp when plant became ready to harvest
+ * @returns Unix timestamp when plant expires
+ */
+export function computeExpirationTime(
+  plantedAtSec: number,
+  readyAtSec: number
+): number {
+  const totalGrowthTime = readyAtSec - plantedAtSec;
+  return readyAtSec + totalGrowthTime;
+}
+
+/**
+ * Compute when a plant becomes ready to harvest
+ * 
+ * Ready time = plantedAt + (harvestStage × stageDurationSec)
+ * 
+ * @param plantedAtSec - Unix timestamp when plant was planted
+ * @param cropMeta - Crop metadata from renderpack
+ * @returns Unix timestamp when plant becomes ready, or null if no harvest stage defined
+ */
+export function computeReadyTime(
+  plantedAtSec: number,
+  cropMeta: CropMetadata
+): number | null {
+  const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
+  const stageDuration =
+    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+      ? cropMeta.stageDurationSec
+      : DEFAULT_STAGE_DURATION_SEC;
+  
+  return plantedAtSec + (harvestStage * stageDuration);
+}
 
 /**
  * Compute the current growth stage of a plant based on elapsed time

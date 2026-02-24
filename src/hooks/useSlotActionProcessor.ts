@@ -3,8 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
-import type { SlotState, SlotAction, CropMetadata } from '@/lib/nostr/types';
-import { EXPIRATION_GRACE_PERIOD_SEC, computeGrowthStageWithWater, isRotten } from '@/lib/game/growth';
+import type { SlotState, SlotAction, CropsMetadata } from '@/lib/nostr/types';
+import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot } from '@/lib/game/growth';
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -18,9 +18,15 @@ import { EXPIRATION_GRACE_PERIOD_SEC, computeGrowthStageWithWater, isRotten } fr
  * 
  * @param worldId - World identifier to filter actions
  * @param relayUrl - Relay URL to use for querying actions and publishing states
+ * @param cropsMetadata - Crop metadata for computing ready_at and expires_at
  * @param enabled - Whether to enable the processor
  */
-export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enabled: boolean = true) {
+export function useSlotActionProcessor(
+  worldId?: string,
+  relayUrl?: string,
+  cropsMetadata?: CropsMetadata | null,
+  enabled: boolean = true
+) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
@@ -61,6 +67,124 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
     enabled: enabled && !!worldId && !!relayUrl && !!user,
     refetchInterval: 5000, // Poll every 5 seconds
   });
+
+  /**
+   * Query SlotStates to check for expiration
+   */
+  const { data: slotStates = [] } = useQuery({
+    queryKey: ['slotstates-expiration-check', worldId, relayUrl],
+    queryFn: async () => {
+      if (!worldId || !relayUrl) return [];
+
+      const relay = nostr.relay(relayUrl);
+      
+      const events = await relay.query([
+        {
+          kinds: [31417],
+          '#t': [worldId],
+          limit: 500,
+        },
+      ]);
+
+      // Parse slot states
+      const parsedSlots: SlotState[] = [];
+      for (const event of events) {
+        const slot = parseSlotState(event);
+        if (slot && slot.type === 'plant') {
+          parsedSlots.push(slot);
+        }
+      }
+
+      return parsedSlots;
+    },
+    enabled: enabled && !!worldId && !!relayUrl && !!user,
+    refetchInterval: 30000, // Check every 30 seconds
+  });
+
+  /**
+   * Check for expired plants and mark them as rotten
+   */
+  useEffect(() => {
+    if (!slotStates.length || !user || !relayUrl) return;
+
+    const checkExpiration = async () => {
+      const now = Math.floor(Date.now() / 1000);
+
+      for (const slot of slotStates) {
+        // Skip if already rotten
+        if (slot.status === 'rotten') continue;
+
+        // Check if expired
+        if (isRotten(slot, now)) {
+          console.log('[SlotActionProcessor] Plant expired, marking as rotten', {
+            slotD: slot.id,
+            expiresAt: slot.expiresAt,
+            now,
+          });
+
+          try {
+            const relay = nostr.relay(relayUrl);
+
+            // Publish updated SlotState with rotten status
+            const tags: string[][] = [
+              ['d', slot.id],
+              ['v', '1'],
+              ['world', slot.worldId],
+              ['map', slot.mapId],
+              ['slot', slot.slot.x.toString(), slot.slot.y.toString()],
+              ['type', 'plant'],
+              ['crop', slot.crop!],
+              ['stage', '0'], // Legacy
+              ['planted_at', slot.plantedAt?.toString() ?? now.toString()],
+              ['status', 'rotten'],
+              ['t', slot.worldId],
+            ];
+
+            // Preserve existing timestamps
+            if (slot.wateredAt) {
+              tags.push(['watered_at', slot.wateredAt.toString()]);
+            }
+            if (slot.waterCount) {
+              tags.push(['water_count', slot.waterCount.toString()]);
+            }
+            if (slot.readyAt) {
+              tags.push(['ready_at', slot.readyAt.toString()]);
+            }
+            if (slot.expiresAt) {
+              tags.push(['expires_at', slot.expiresAt.toString()]);
+            }
+
+            const event = await user.signer.signEvent({
+              kind: 31417,
+              content: '',
+              tags,
+              created_at: now,
+            });
+
+            await relay.event(event);
+
+            console.log('[SlotActionProcessor] Published rotten SlotState', {
+              slotD: slot.id,
+              relayUrl,
+              eventId: event.id,
+            });
+
+            // Invalidate slot states to refetch
+            queryClient.invalidateQueries({
+              queryKey: ['slotstates', slot.worldId, slot.mapId],
+            });
+            queryClient.invalidateQueries({
+              queryKey: ['slotstates-expiration-check', worldId, relayUrl],
+            });
+          } catch (error) {
+            console.error('[SlotActionProcessor] Error marking plant as rotten', error);
+          }
+        }
+      }
+    };
+
+    checkExpiration();
+  }, [slotStates, user, relayUrl, queryClient, nostr, worldId]);
 
   /**
    * Process actions and apply to SlotState
@@ -168,7 +292,7 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
           }
 
           // Validate action
-          const validationResult = validateAction(action, currentSlot);
+          const validationResult = validateAction(action, currentSlot, cropsMetadata);
           
           if (!validationResult.valid) {
             console.warn('[SlotActionProcessor] Invalid action', {
@@ -194,7 +318,7 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
           });
 
           // Apply action by publishing new SlotState to the same relay
-          await applyAction(action, currentSlot, nostr, relayUrl, user);
+          await applyAction(action, currentSlot, nostr, relayUrl, user, cropsMetadata);
 
           // Mark as processed
           processedActionsRef.current.add(actionKey);
@@ -216,7 +340,7 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
     };
 
     processActions();
-  }, [actions, user, relayUrl, queryClient, nostr]);
+  }, [actions, user, relayUrl, queryClient, nostr, cropsMetadata]);
 
   return {
     actionsProcessed: processedActionsRef.current.size,
@@ -228,7 +352,8 @@ export function useSlotActionProcessor(worldId?: string, relayUrl?: string, enab
  */
 function validateAction(
   action: SlotAction,
-  currentSlot?: SlotState
+  currentSlot?: SlotState,
+  cropsMetadata?: CropsMetadata | null
 ): { valid: boolean; reason?: string; canRetry?: boolean } {
   if (action.action === 'harvest') {
     // Harvest validation
@@ -257,7 +382,19 @@ function validateAction(
       };
     }
 
-    // TODO: Validate crop is harvestable (requires crop metadata)
+    // Validate crop is harvestable (requires crop metadata)
+    if (cropsMetadata?.crops?.[currentSlot.crop]) {
+      const cropMeta = cropsMetadata.crops[currentSlot.crop];
+      const now = Math.floor(Date.now() / 1000);
+      const harvestable = isHarvestableSlot(currentSlot, now, cropMeta);
+      
+      if (!harvestable) {
+        return { 
+          valid: false, 
+          reason: 'Crop is not ready to harvest (not at final stage or is rotten)' 
+        };
+      }
+    }
 
     return { valid: true };
   }
@@ -375,7 +512,8 @@ async function applyAction(
   currentSlot: SlotState | undefined,
   nostr: ReturnType<typeof useNostr>['nostr'],
   relayUrl: string,
-  user: NonNullable<ReturnType<typeof useCurrentUser>['user']>
+  user: NonNullable<ReturnType<typeof useCurrentUser>['user']>,
+  cropsMetadata?: CropsMetadata | null
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
 
@@ -419,21 +557,47 @@ async function applyAction(
       throw new Error('Missing crop for plant action');
     }
 
+    // Build base tags
+    const tags: string[][] = [
+      ['d', action.slotD],
+      ['v', '1'],
+      ['world', action.worldId],
+      ['map', action.mapId],
+      ['slot', action.slot.x.toString(), action.slot.y.toString()],
+      ['type', 'plant'],
+      ['crop', action.crop],
+      ['stage', '0'], // Legacy
+      ['planted_at', now.toString()],
+      ['status', 'healthy'],
+      ['t', action.worldId],
+    ];
+
+    // Compute ready_at and expires_at if crop metadata available
+    const cropMeta = cropsMetadata?.crops?.[action.crop];
+    if (cropMeta) {
+      const readyAt = computeReadyTime(now, cropMeta);
+      if (readyAt) {
+        tags.push(['ready_at', readyAt.toString()]);
+        
+        // Compute expiration time (2× growth time)
+        const expiresAt = computeExpirationTime(now, readyAt);
+        tags.push(['expires_at', expiresAt.toString()]);
+
+        console.log('[SlotActionProcessor] Computed timestamps for plant', {
+          crop: action.crop,
+          plantedAt: now,
+          readyAt,
+          expiresAt,
+          growthTime: readyAt - now,
+          expirationTime: expiresAt - readyAt,
+        });
+      }
+    }
+
     const event = await user.signer.signEvent({
       kind: 31417,
       content: '',
-      tags: [
-        ['d', action.slotD],
-        ['v', '1'],
-        ['world', action.worldId],
-        ['map', action.mapId],
-        ['slot', action.slot.x.toString(), action.slot.y.toString()],
-        ['type', 'plant'],
-        ['crop', action.crop],
-        ['stage', '0'],
-        ['planted_at', now.toString()],
-        ['t', action.worldId],
-      ],
+      tags,
       created_at: now,
     });
 
@@ -446,10 +610,13 @@ async function applyAction(
       eventId: event.id,
     });
   } else if (action.action === 'water') {
-    // Water: Update wateredAt timestamp
+    // Water: Update wateredAt timestamp and increment water_count
     if (!currentSlot || currentSlot.type !== 'plant' || !currentSlot.crop) {
       throw new Error('Cannot water non-plant slot');
     }
+
+    // Increment water count
+    const waterCount = (currentSlot.waterCount ?? 0) + 1;
 
     // Build tags for watered plant
     const tags: string[][] = [
@@ -463,6 +630,7 @@ async function applyAction(
       ['stage', '0'], // Legacy
       ['planted_at', currentSlot.plantedAt?.toString() ?? now.toString()],
       ['watered_at', now.toString()], // Update water timestamp
+      ['water_count', waterCount.toString()],
       ['status', currentSlot.status ?? 'healthy'],
       ['t', action.worldId],
     ];
@@ -487,6 +655,7 @@ async function applyAction(
     console.log('[SlotActionProcessor] Published watered SlotState', {
       slotD: action.slotD,
       wateredAt: now,
+      waterCount,
       relayUrl,
       eventId: event.id,
     });
