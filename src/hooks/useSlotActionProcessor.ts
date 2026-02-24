@@ -568,6 +568,7 @@ async function applyAction(
       ['crop', action.crop],
       ['stage', '0'], // Legacy
       ['planted_at', now.toString()],
+      ['water_count', '0'], // Initialize water count to 0
       ['status', 'healthy'],
       ['t', action.worldId],
     ];

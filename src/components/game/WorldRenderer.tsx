@@ -343,7 +343,7 @@ function ResponsiveWorldView({
     }
 
     // Check if plant needs water
-    const plantsNeedsWater = needsWater(slot.wateredAt);
+    const plantsNeedsWater = needsWater(plantedAt, slot.waterCount, nowSec, cropMeta);
     if (plantsNeedsWater) {
       console.log('[handlePlantClick] Watering plant', {
         crop: slot.crop,
@@ -646,10 +646,10 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     }
   }
 
-  // Compute current growth stage based on time elapsed WITH watering
+  // Compute current growth stage based on time elapsed WITH water-gating
   // slot.stage is LEGACY data and NEVER used for rendering
   const computedStage = cropMeta
-    ? computeGrowthStageWithWater(plantedAt, slot.wateredAt, nowSec, cropMeta)
+    ? computeGrowthStageWithWater(plantedAt, slot.waterCount, nowSec, cropMeta)
     : 0; // Fallback to seed stage if no metadata
 
   // Compute seconds until next stage (for user tooltip)
@@ -658,7 +658,7 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     : null;
 
   // Check if plant needs watering
-  const plantsNeedsWater = needsWater(slot.wateredAt);
+  const plantsNeedsWater = cropMeta ? needsWater(plantedAt, slot.waterCount, nowSec, cropMeta) : false;
 
   // Check if plant is rotten/expired
   const plantIsRotten = isRotten(slot, nowSec);
