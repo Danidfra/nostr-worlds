@@ -159,6 +159,7 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
   // Handle plant slots (including legacy events without type tag)
   const crop = getTag(event, 'crop');
   const stageStr = getTag(event, 'stage');
+  const stageStartedAtStr = getTag(event, 'stage_started_at');
   const plantedAtStr = getTag(event, 'planted_at');
   const wateredAtStr = getTag(event, 'watered_at');
   const waterCountStr = getTag(event, 'water_count');
@@ -183,10 +184,16 @@ export function parseSlotState(event: NostrEvent): SlotState | null {
     ? parseInt(plantedAtStr, 10)
     : event.created_at;
 
+  // Parse stage_started_at with fallback to plantedAt or event.created_at
+  const stageStartedAt = stageStartedAtStr
+    ? parseInt(stageStartedAtStr, 10)
+    : plantedAt;
+
   return {
     ...baseState,
     crop,
     stage,
+    stageStartedAt,
     plantedAt,
     wateredAt: wateredAtStr ? parseInt(wateredAtStr, 10) : undefined,
     waterCount: waterCountStr ? parseInt(waterCountStr, 10) : undefined,

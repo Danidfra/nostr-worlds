@@ -141,26 +141,80 @@ export function computeSecondsUntilNextStage(
 }
 
 /**
- * Compute growth stage with water-gated progression
+ * Compute growth stage with water-gated progression and per-stage timing
  * 
- * Water-gated stages model:
- * - Time advances stages based on elapsed time since planting
- * - water_count gates/limits how far the plant can progress
- * - Each water unlocks 1 additional stage
- * - Without water (water_count = 0), plant stays at stage 0 even if time passes
+ * NEW IMPLEMENTATION: Per-stage timing to prevent "banked time" exploits
  * 
- * Formula:
- * - stageByTime = floor((nowSec - plantedAtSec) / stageDurationSec), clamped to [0, harvestStage]
- * - stageUnlocked = clamp(waterCount, 0, harvestStage)
- * - computedStage = min(stageByTime, stageUnlocked)
+ * Rules:
+ * 1. Each stage requires BOTH enough elapsed time AND enough water
+ * 2. Time is measured from stage_started_at (not plantedAt)
+ * 3. When water unlocks a new stage, stage_started_at resets to "now"
+ * 4. A plant can advance at most 1 stage per stageDurationSec interval
  * 
- * @param plantedAtSec - Unix timestamp when plant was planted
+ * This prevents the exploit where:
+ * - Plant sits unwatered for 30 minutes
+ * - Player waters it multiple times quickly
+ * - Plant instantly jumps multiple stages (OLD BEHAVIOR - FIXED)
+ * 
+ * @param currentStage - Current authoritative stage from SlotState
+ * @param stageStartedAtSec - Unix timestamp when current stage timer started
  * @param waterCount - Number of times plant has been watered
  * @param nowSec - Current unix timestamp
  * @param cropMeta - Crop metadata from renderpack
- * @returns Current stage index (0-based)
+ * @returns New computed stage index (0-based)
  */
 export function computeGrowthStageWithWater(
+  currentStage: number,
+  stageStartedAtSec: number,
+  waterCount: number | undefined,
+  nowSec: number,
+  cropMeta: CropMetadata
+): number {
+  // Handle clock skew - if now is before stage started time, stay at current stage
+  if (nowSec < stageStartedAtSec) {
+    return currentStage;
+  }
+
+  // Get stage duration (with default fallback)
+  const stageDuration =
+    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+      ? cropMeta.stageDurationSec
+      : DEFAULT_STAGE_DURATION_SEC;
+
+  // Determine harvest stage (final stage)
+  const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
+
+  // Calculate elapsed time since THIS stage started
+  const elapsedSec = nowSec - stageStartedAtSec;
+
+  // Can we advance by 1 stage based on time?
+  const canAdvanceByTime = elapsedSec >= stageDuration;
+
+  // Calculate stage unlocked by water_count
+  // water_count gates how far the plant can progress
+  const stageUnlocked = Math.max(0, Math.min(waterCount ?? 0, harvestStage));
+
+  // Can we advance based on water?
+  const canAdvanceByWater = currentStage < stageUnlocked;
+
+  // Only advance 1 stage if BOTH time and water allow it
+  let newStage = currentStage;
+  if (canAdvanceByTime && canAdvanceByWater) {
+    newStage = Math.min(currentStage + 1, harvestStage);
+  }
+
+  return newStage;
+}
+
+/**
+ * LEGACY: Compute growth stage with water-gated progression (time-based from plantedAt)
+ * 
+ * @deprecated This function uses plantedAt for all stage timing, which allows "banked time" exploits.
+ * Use the new computeGrowthStageWithWater() with per-stage timing instead.
+ * 
+ * Kept for backward compatibility and migration scenarios.
+ */
+export function computeGrowthStageWithWaterLegacy(
   plantedAtSec: number,
   waterCount: number | undefined,
   nowSec: number,
@@ -198,31 +252,28 @@ export function computeGrowthStageWithWater(
 }
 
 /**
- * Check if a plant needs watering
+ * Check if a plant needs watering (NEW implementation with per-stage timing)
  * 
- * A plant needs water when it is blocked by missing water to reach the next stage.
+ * A plant needs water when:
+ * - The plant has enough time to advance to the next stage
+ * - But water_count is blocking progression
  * 
- * Rules:
- * - needsWater = (stageUnlocked <= stageByTime) AND (computedStage < harvestStage)
- * - This means: time has advanced past the water-gated limit, and the plant is not yet fully grown
- * 
- * @param plantedAtSec - Unix timestamp when plant was planted
- * @param waterCount - Number of times plant has been watered
+ * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
  * @param cropMeta - Crop metadata from renderpack
  * @returns True if plant needs watering
  */
 export function needsWater(
-  plantedAtSec: number,
-  waterCount: number | undefined,
+  slot: SlotState,
   nowSec: number,
   cropMeta: CropMetadata
 ): boolean {
-  // Handle clock skew
-  if (nowSec < plantedAtSec) {
-    return true; // Plant just planted, needs initial water
-  }
-
+  // Get current stage (authoritative from SlotState, or fallback to 0)
+  const currentStage = slot.stage ?? 0;
+  
+  // Get stage_started_at (or fallback to plantedAt or event.created_at)
+  const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
+  
   // Get stage duration (with default fallback)
   const stageDuration =
     cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
@@ -231,24 +282,27 @@ export function needsWater(
 
   // Determine harvest stage (final stage)
   const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
+  
+  // Already at harvest stage? No need for water
+  if (currentStage >= harvestStage) {
+    return false;
+  }
 
-  // Calculate elapsed time
-  const elapsedSec = nowSec - plantedAtSec;
+  // Calculate elapsed time since THIS stage started
+  const elapsedSec = nowSec - stageStartedAt;
 
-  // Calculate stage based on time elapsed
-  const stageByTime = Math.floor(elapsedSec / stageDuration);
-  const stageByTimeClamped = Math.max(0, Math.min(stageByTime, harvestStage));
+  // Has enough time passed to advance to the next stage?
+  const canAdvanceByTime = elapsedSec >= stageDuration;
 
   // Calculate stage unlocked by water_count
-  const stageUnlocked = Math.max(0, Math.min(waterCount ?? 0, harvestStage));
+  const waterCount = slot.waterCount ?? 0;
+  const stageUnlocked = Math.max(0, Math.min(waterCount, harvestStage));
 
-  // Final computed stage
-  const computedStage = Math.min(stageByTimeClamped, stageUnlocked);
+  // Can we advance based on water?
+  const canAdvanceByWater = currentStage < stageUnlocked;
 
-  // Needs water if:
-  // 1. Stage unlocked by water is <= stage by time (water is the limiting factor)
-  // 2. AND plant is not yet at harvest stage (still growing)
-  return stageUnlocked <= stageByTimeClamped && computedStage < harvestStage;
+  // Needs water if: time allows advancement but water blocks it
+  return canAdvanceByTime && !canAdvanceByWater;
 }
 
 /**
@@ -275,10 +329,10 @@ export function isRotten(slot: SlotState, nowSec: number): boolean {
 }
 
 /**
- * Check if a plant is ready to harvest
+ * Check if a plant is ready to harvest (NEW implementation with per-stage timing)
  * 
  * A plant is harvestable when:
- * - It has reached the harvest stage (not just the final sprite stage)
+ * - It has reached the harvest stage (authoritative stage from SlotState)
  * - It is not rotten/expired
  * 
  * @param slot - SlotState with plant data
@@ -296,12 +350,59 @@ export function isHarvestableSlot(
     return false;
   }
 
-  // Check if reached harvest stage
-  const plantedAt = slot.plantedAt ?? slot.event.created_at;
-  const computedStage = computeGrowthStageWithWater(plantedAt, slot.waterCount, nowSec, cropMeta);
+  // Get current stage (authoritative from SlotState, or fallback to 0)
+  const currentStage = slot.stage ?? 0;
   const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
   
-  return computedStage >= harvestStage;
+  return currentStage >= harvestStage;
+}
+
+/**
+ * Compute seconds until plant is ready to harvest (NEW implementation)
+ * 
+ * This calculates the total time remaining until the plant reaches harvest stage,
+ * considering both the current stage's remaining time and all future stages.
+ * 
+ * @param slot - SlotState with plant data
+ * @param nowSec - Current unix timestamp
+ * @param cropMeta - Crop metadata from renderpack
+ * @returns Seconds until ready, or null if already ready or cannot determine
+ */
+export function computeSecondsUntilReady(
+  slot: SlotState,
+  nowSec: number,
+  cropMeta: CropMetadata
+): number | null {
+  // Get current stage (authoritative from SlotState, or fallback to 0)
+  const currentStage = slot.stage ?? 0;
+  const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
+  
+  // Already at harvest stage?
+  if (currentStage >= harvestStage) {
+    return null;
+  }
+  
+  // Get stage_started_at (or fallback to plantedAt or event.created_at)
+  const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
+  
+  // Get stage duration (with default fallback)
+  const stageDuration =
+    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+      ? cropMeta.stageDurationSec
+      : DEFAULT_STAGE_DURATION_SEC;
+  
+  // Calculate time until current stage completes
+  const elapsedInCurrentStage = nowSec - stageStartedAt;
+  const remainingInCurrentStage = Math.max(0, stageDuration - elapsedInCurrentStage);
+  
+  // Calculate how many stages remain after current stage
+  const stagesRemaining = harvestStage - currentStage;
+  
+  // Time for remaining stages after current one completes
+  const timeForFutureStages = Math.max(0, stagesRemaining - 1) * stageDuration;
+  
+  // Total time = current stage remaining + future stages
+  return remainingInCurrentStage + timeForFutureStages;
 }
 
 /**

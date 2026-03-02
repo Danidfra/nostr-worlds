@@ -83,8 +83,10 @@ export interface SlotState {
   // Plant-specific fields (only present when type === 'plant')
   /** Crop identifier */
   crop?: string;
-  /** Growth stage (0-based index) - LEGACY: Stage is now computed from time, not stored */
+  /** Growth stage (0-based index) - AUTHORITATIVE: Host-controlled stage tracking */
   stage?: number;
+  /** Timestamp when current stage's timer started (unix seconds) - Used for per-stage timing */
+  stageStartedAt?: number;
   /** Planting timestamp - Used for time-based growth computation */
   plantedAt?: number;
   /** Last watering timestamp - Required for stage progression */

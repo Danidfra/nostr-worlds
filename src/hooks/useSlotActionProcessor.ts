@@ -4,7 +4,7 @@ import { useNostr } from '@nostrify/react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction, CropsMetadata } from '@/lib/nostr/types';
-import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot } from '@/lib/game/growth';
+import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater } from '@/lib/game/growth';
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -102,12 +102,12 @@ export function useSlotActionProcessor(
   });
 
   /**
-   * Check for expired plants and mark them as rotten
+   * Check for expired plants, mark them as rotten, and advance growth stages
    */
   useEffect(() => {
-    if (!slotStates.length || !user || !relayUrl) return;
+    if (!slotStates.length || !user || !relayUrl || !cropsMetadata) return;
 
-    const checkExpiration = async () => {
+    const checkExpirationAndGrowth = async () => {
       const now = Math.floor(Date.now() / 1000);
 
       for (const slot of slotStates) {
@@ -134,7 +134,8 @@ export function useSlotActionProcessor(
               ['slot', slot.slot.x.toString(), slot.slot.y.toString()],
               ['type', 'plant'],
               ['crop', slot.crop!],
-              ['stage', '0'], // Legacy
+              ['stage', (slot.stage ?? 0).toString()],
+              ['stage_started_at', (slot.stageStartedAt ?? slot.plantedAt ?? now).toString()],
               ['planted_at', slot.plantedAt?.toString() ?? now.toString()],
               ['status', 'rotten'],
               ['t', slot.worldId],
@@ -179,12 +180,93 @@ export function useSlotActionProcessor(
           } catch (error) {
             console.error('[SlotActionProcessor] Error marking plant as rotten', error);
           }
+          continue; // Skip growth check for rotten plants
+        }
+
+        // Check if plant can advance to next stage
+        if (!slot.crop) continue;
+        const cropMeta = cropsMetadata.crops?.[slot.crop];
+        if (!cropMeta) continue;
+
+        const currentStage = slot.stage ?? 0;
+        const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
+        const waterCount = slot.waterCount ?? 0;
+
+        // Use the new computeGrowthStageWithWater function
+        const newStage = computeGrowthStageWithWater(currentStage, stageStartedAt, waterCount, now, cropMeta);
+
+        // If stage advanced, publish updated SlotState
+        if (newStage > currentStage) {
+          console.log('[SlotActionProcessor] Plant advanced to next stage', {
+            slotD: slot.id,
+            currentStage,
+            newStage,
+            now,
+          });
+
+          try {
+            const relay = nostr.relay(relayUrl);
+
+            // Build tags for advanced plant
+            const tags: string[][] = [
+              ['d', slot.id],
+              ['v', '1'],
+              ['world', slot.worldId],
+              ['map', slot.mapId],
+              ['slot', slot.slot.x.toString(), slot.slot.y.toString()],
+              ['type', 'plant'],
+              ['crop', slot.crop],
+              ['stage', newStage.toString()], // AUTHORITATIVE: New stage
+              ['stage_started_at', now.toString()], // NEW: Reset stage timer
+              ['planted_at', slot.plantedAt?.toString() ?? now.toString()],
+              ['water_count', waterCount.toString()],
+              ['status', slot.status ?? 'healthy'],
+              ['t', slot.worldId],
+            ];
+
+            // Preserve existing timestamps
+            if (slot.wateredAt) {
+              tags.push(['watered_at', slot.wateredAt.toString()]);
+            }
+            if (slot.readyAt) {
+              tags.push(['ready_at', slot.readyAt.toString()]);
+            }
+            if (slot.expiresAt) {
+              tags.push(['expires_at', slot.expiresAt.toString()]);
+            }
+
+            const event = await user.signer.signEvent({
+              kind: 31417,
+              content: '',
+              tags,
+              created_at: now,
+            });
+
+            await relay.event(event);
+
+            console.log('[SlotActionProcessor] Published advanced SlotState', {
+              slotD: slot.id,
+              newStage,
+              relayUrl,
+              eventId: event.id,
+            });
+
+            // Invalidate slot states to refetch
+            queryClient.invalidateQueries({
+              queryKey: ['slotstates', slot.worldId, slot.mapId],
+            });
+            queryClient.invalidateQueries({
+              queryKey: ['slotstates-expiration-check', worldId, relayUrl],
+            });
+          } catch (error) {
+            console.error('[SlotActionProcessor] Error advancing plant stage', error);
+          }
         }
       }
     };
 
-    checkExpiration();
-  }, [slotStates, user, relayUrl, queryClient, nostr, worldId]);
+    checkExpirationAndGrowth();
+  }, [slotStates, user, relayUrl, queryClient, nostr, worldId, cropsMetadata]);
 
   /**
    * Process actions and apply to SlotState
@@ -557,7 +639,7 @@ async function applyAction(
       throw new Error('Missing crop for plant action');
     }
 
-    // Build base tags
+    // Build base tags with NEW per-stage timing fields
     const tags: string[][] = [
       ['d', action.slotD],
       ['v', '1'],
@@ -566,7 +648,8 @@ async function applyAction(
       ['slot', action.slot.x.toString(), action.slot.y.toString()],
       ['type', 'plant'],
       ['crop', action.crop],
-      ['stage', '0'], // Legacy
+      ['stage', '0'], // AUTHORITATIVE: Start at stage 0
+      ['stage_started_at', now.toString()], // NEW: Per-stage timing starts now
       ['planted_at', now.toString()],
       ['water_count', '0'], // Initialize water count to 0
       ['status', 'healthy'],
@@ -619,6 +702,40 @@ async function applyAction(
     // Increment water count
     const waterCount = (currentSlot.waterCount ?? 0) + 1;
 
+    // Get current stage and stage_started_at
+    const currentStage = currentSlot.stage ?? 0;
+    const currentStageStartedAt = currentSlot.stageStartedAt ?? currentSlot.plantedAt ?? now;
+
+    // Get crop metadata to check if plant was water-blocked
+    const cropMeta = cropsMetadata?.crops?.[currentSlot.crop];
+    
+    // Determine if plant was water-blocked (needs to restart stage timer)
+    let newStageStartedAt = currentStageStartedAt;
+    if (cropMeta) {
+      const stageDuration = cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+        ? cropMeta.stageDurationSec
+        : 300; // DEFAULT_STAGE_DURATION_SEC
+      
+      const elapsedSec = now - currentStageStartedAt;
+      const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
+      
+      // Was the plant blocked by water (time elapsed but water was limiting)?
+      const canAdvanceByTime = elapsedSec >= stageDuration;
+      const stageUnlockedBefore = currentSlot.waterCount ?? 0;
+      const wasWaterBlocked = canAdvanceByTime && currentStage >= stageUnlockedBefore && currentStage < harvestStage;
+      
+      // If plant was water-blocked, restart the stage timer now
+      if (wasWaterBlocked) {
+        newStageStartedAt = now;
+        console.log('[SlotActionProcessor] Plant was water-blocked, restarting stage timer', {
+          slotD: action.slotD,
+          currentStage,
+          waterCount,
+          stageStartedAt: newStageStartedAt,
+        });
+      }
+    }
+
     // Build tags for watered plant
     const tags: string[][] = [
       ['d', action.slotD],
@@ -628,7 +745,8 @@ async function applyAction(
       ['slot', action.slot.x.toString(), action.slot.y.toString()],
       ['type', 'plant'],
       ['crop', currentSlot.crop],
-      ['stage', '0'], // Legacy
+      ['stage', currentStage.toString()], // AUTHORITATIVE: Preserve current stage
+      ['stage_started_at', newStageStartedAt.toString()], // NEW: Reset if water-blocked
       ['planted_at', currentSlot.plantedAt?.toString() ?? now.toString()],
       ['watered_at', now.toString()], // Update water timestamp
       ['water_count', waterCount.toString()],
@@ -657,6 +775,8 @@ async function applyAction(
       slotD: action.slotD,
       wateredAt: now,
       waterCount,
+      stage: currentStage,
+      stageStartedAt: newStageStartedAt,
       relayUrl,
       eventId: event.id,
     });

@@ -101,7 +101,7 @@ interface CropPreviewProps {
   tileSize: number;
 }
 
-function CropPreview({ file, stages, harvestStage, renderpackUrl, tileSize }: CropPreviewProps) {
+function CropPreview({ file, stages, harvestStage, renderpackUrl }: CropPreviewProps) {
   // Determine which frame to show (harvest frame or last frame)
   const frameIndex = harvestStage ?? (stages - 1);
   

@@ -12,7 +12,7 @@ import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
-import { computeGrowthStageWithWater, computeSecondsUntilNextStage, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
+import { computeSecondsUntilReady, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -343,7 +343,7 @@ function ResponsiveWorldView({
     }
 
     // Check if plant needs water
-    const plantsNeedsWater = needsWater(plantedAt, slot.waterCount, nowSec, cropMeta);
+    const plantsNeedsWater = needsWater(slot, nowSec, cropMeta);
     if (plantsNeedsWater) {
       console.log('[handlePlantClick] Watering plant', {
         crop: slot.crop,
@@ -373,7 +373,7 @@ function ResponsiveWorldView({
         plantedAt,
         wateredAt: slot.wateredAt,
         nowSec,
-        currentStage: computeGrowthStageWithWater(plantedAt, slot.wateredAt, nowSec, cropMeta),
+        currentStage: slot.stage ?? 0,
         maxStage: cropMeta.stages - 1,
       });
       return;
@@ -715,19 +715,22 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     }
   }
 
-  // Compute current growth stage based on time elapsed WITH water-gating
-  // slot.stage is LEGACY data and NEVER used for rendering
-  const computedStage = cropMeta
-    ? computeGrowthStageWithWater(plantedAt, slot.waterCount, nowSec, cropMeta)
-    : 0; // Fallback to seed stage if no metadata
+  // Use AUTHORITATIVE stage from SlotState (host-controlled)
+  // Fallback to 0 for legacy events without stage tag
+  const computedStage = slot.stage ?? 0;
 
-  // Compute seconds until next stage (for user tooltip)
-  const secondsUntilNext = cropMeta
-    ? computeSecondsUntilNextStage(plantedAt, nowSec, cropMeta, computedStage)
+  // Compute seconds until plant is ready to harvest (for "Ready in" tooltip)
+  const secondsUntilReady = cropMeta
+    ? computeSecondsUntilReady(slot, nowSec, cropMeta)
+    : null;
+
+  // Compute seconds until expiration (for "Expires in" tooltip)
+  const secondsUntilExpires = slot.expiresAt
+    ? Math.max(0, slot.expiresAt - nowSec)
     : null;
 
   // Check if plant needs watering
-  const plantsNeedsWater = cropMeta ? needsWater(plantedAt, slot.waterCount, nowSec, cropMeta) : false;
+  const plantsNeedsWater = cropMeta ? needsWater(slot, nowSec, cropMeta) : false;
 
   // Determine if plant is ready to harvest
   const ready = cropMeta && !plantIsRotten ? isHarvestableSlot(slot, nowSec, cropMeta) : false;
@@ -825,10 +828,20 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
         </div>
       )}
       
-      {/* Tooltip: Not ready (has water, still growing) */}
-      {!showDebug && !ready && !plantIsRotten && !plantsNeedsWater && isHovered && cropMeta && secondsUntilNext !== null && secondsUntilNext > 0 && (
-        <div className="absolute left-1/2 -translate-x-1/2 -top-8 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none">
-          {formatTimeRemaining(secondsUntilNext)}
+      {/* Tooltip: Plant status (Ready in / Expires in) */}
+      {!showDebug && !plantIsRotten && !plantsNeedsWater && isHovered && cropMeta && (
+        <div className="absolute left-1/2 -translate-x-1/2 -top-10 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none space-y-0.5">
+          {/* Show "Ready in" if not yet ready, or "Ready!" if harvestable */}
+          {!ready && secondsUntilReady !== null && secondsUntilReady > 0 ? (
+            <div>Ready in: {formatTimeRemaining(secondsUntilReady)}</div>
+          ) : ready ? (
+            <div className="text-green-400">Ready!</div>
+          ) : null}
+          
+          {/* Show "Expires in" if expiresAt is set and not expired yet */}
+          {secondsUntilExpires !== null && secondsUntilExpires > 0 && (
+            <div className="text-orange-400">Expires in: {formatTimeRemaining(secondsUntilExpires)}</div>
+          )}
         </div>
       )}
       
@@ -848,11 +861,14 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
           <div>Planted: {new Date(plantedAt * 1000).toLocaleTimeString()}</div>
           <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
           <div>Elapsed: {nowSec - plantedAt}s</div>
-          {secondsUntilNext !== null && secondsUntilNext > 0 && (
-            <div className="text-green-400">Next stage: {secondsUntilNext}s</div>
+          {secondsUntilReady !== null && secondsUntilReady > 0 && (
+            <div className="text-green-400">Ready in: {secondsUntilReady}s</div>
           )}
-          {secondsUntilNext === null && (
+          {secondsUntilReady === null && ready && (
             <div className="text-yellow-400">Ready to harvest!</div>
+          )}
+          {secondsUntilExpires !== null && secondsUntilExpires > 0 && (
+            <div className="text-orange-400">Expires in: {secondsUntilExpires}s</div>
           )}
           <div className="truncate max-w-[200px]">ID: {slot.id}</div>
           {isPending && <div className="text-yellow-400">Status: Pending</div>}
