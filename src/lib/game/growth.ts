@@ -8,31 +8,42 @@ const DEFAULT_STAGE_DURATION_SEC = 300;
 
 /**
  * Expiration grace period in seconds (1 hour)
- * Time after reaching harvest stage before plant becomes rotten
- * @deprecated Use computeExpirationTime() instead for dynamic expiration
+ * @deprecated This constant is no longer used. Expiration is now stage-based:
+ * expires_at = watered_at + 2× stageDuration (see computeExpirationTime)
  */
 export const EXPIRATION_GRACE_PERIOD_SEC = 3600;
 
 /**
- * Compute when a plant expires (becomes rotten)
+ * Compute when a plant expires (becomes rotten) - NEW STAGE-BASED MODEL
  * 
- * Expiration time = readyAt + total growth time
- * This means crops expire 2× their growth time from planting.
+ * Expiration is now relative to the last watering time, not total plant lifetime.
  * 
- * Examples:
- * - 5 min grow → ready at 5 min → expires at 10 min
- * - 30 min grow → ready at 30 min → expires at 60 min
+ * Rule: A plant expires after 2× the time required to reach the next stage
+ * Time is counted from the last watered_at timestamp.
  * 
- * @param plantedAtSec - Unix timestamp when plant was planted
- * @param readyAtSec - Unix timestamp when plant became ready to harvest
+ * Formula: expires_at = watered_at + 2 * stageDuration
+ * 
+ * Examples (stageDuration = 5 min):
+ * - Plant watered at 10:00 → expires at 10:10 (2 × 5 min)
+ * - If watered again at 10:05 → expires at 10:15 (resets)
+ * 
+ * This matches intuitive gameplay:
+ * - If next stage takes 5 minutes → plant rots after 10 minutes without interaction
+ * 
+ * @param wateredAtSec - Unix timestamp when plant was last watered
+ * @param cropMeta - Crop metadata from renderpack
  * @returns Unix timestamp when plant expires
  */
 export function computeExpirationTime(
-  plantedAtSec: number,
-  readyAtSec: number
+  wateredAtSec: number,
+  cropMeta: CropMetadata
 ): number {
-  const totalGrowthTime = readyAtSec - plantedAtSec;
-  return readyAtSec + totalGrowthTime;
+  const stageDuration =
+    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+      ? cropMeta.stageDurationSec
+      : DEFAULT_STAGE_DURATION_SEC;
+  
+  return wateredAtSec + (2 * stageDuration);
 }
 
 /**

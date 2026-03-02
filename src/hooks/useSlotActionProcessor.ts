@@ -4,7 +4,36 @@ import { useNostr } from '@nostrify/react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction, CropsMetadata } from '@/lib/nostr/types';
+import type { NostrEvent } from '@nostrify/nostrify';
 import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater } from '@/lib/game/growth';
+
+/** Default stage duration in seconds (5 minutes) */
+const DEFAULT_STAGE_DURATION_SEC = 300;
+
+/**
+ * Deduplicate SlotState events by d tag, keeping only the latest event per slot
+ * 
+ * Relays may return multiple historical events for the same slot.
+ * We must keep only the newest (highest created_at) to avoid re-processing old states.
+ * 
+ * @param events - Array of Nostr events (kind 31417)
+ * @returns Deduplicated array with one event per d tag
+ */
+function deduplicateSlotStateEvents(events: NostrEvent[]): NostrEvent[] {
+  const slotMap = new Map<string, NostrEvent>();
+  
+  for (const event of events) {
+    const dTag = event.tags.find(([name]) => name === 'd')?.[1];
+    if (!dTag) continue;
+    
+    const existing = slotMap.get(dTag);
+    if (!existing || event.created_at > existing.created_at) {
+      slotMap.set(dTag, event);
+    }
+  }
+  
+  return Array.from(slotMap.values());
+}
 
 /**
  * Hook for processing SlotAction events as a host/authority
@@ -86,9 +115,12 @@ export function useSlotActionProcessor(
         },
       ]);
 
+      // Deduplicate events by d tag (keep only latest per slot)
+      const dedupedEvents = deduplicateSlotStateEvents(events);
+
       // Parse slot states
       const parsedSlots: SlotState[] = [];
-      for (const event of events) {
+      for (const event of dedupedEvents) {
         const slot = parseSlotState(event);
         if (slot && slot.type === 'plant') {
           parsedSlots.push(slot);
@@ -327,10 +359,18 @@ export function useSlotActionProcessor(
               totalFetched: slotEvents.length,
             });
 
+            // Deduplicate events by d tag (keep only latest per slot)
+            const dedupedEvents = deduplicateSlotStateEvents(slotEvents);
+
+            console.log('[SlotActionProcessor] Deduplicated SlotStates', {
+              before: slotEvents.length,
+              after: dedupedEvents.length,
+            });
+
             // Parse all events and find the one matching slotD
             const parsedSlots: SlotState[] = [];
             
-            for (const event of slotEvents) {
+            for (const event of dedupedEvents) {
               const parsed = parseSlotState(event);
               if (parsed) {
                 parsedSlots.push(parsed);
@@ -651,6 +691,7 @@ async function applyAction(
       ['stage', '0'], // AUTHORITATIVE: Start at stage 0
       ['stage_started_at', now.toString()], // NEW: Per-stage timing starts now
       ['planted_at', now.toString()],
+      ['watered_at', now.toString()], // NEW: Initialize watered_at = now for expiration
       ['water_count', '0'], // Initialize water count to 0
       ['status', 'healthy'],
       ['t', action.worldId],
@@ -662,20 +703,21 @@ async function applyAction(
       const readyAt = computeReadyTime(now, cropMeta);
       if (readyAt) {
         tags.push(['ready_at', readyAt.toString()]);
-        
-        // Compute expiration time (2× growth time)
-        const expiresAt = computeExpirationTime(now, readyAt);
-        tags.push(['expires_at', expiresAt.toString()]);
-
-        console.log('[SlotActionProcessor] Computed timestamps for plant', {
-          crop: action.crop,
-          plantedAt: now,
-          readyAt,
-          expiresAt,
-          growthTime: readyAt - now,
-          expirationTime: expiresAt - readyAt,
-        });
       }
+      
+      // NEW EXPIRATION MODEL: Stage-based (2× stageDuration from watered_at)
+      const expiresAt = computeExpirationTime(now, cropMeta);
+      tags.push(['expires_at', expiresAt.toString()]);
+
+      console.log('[SlotActionProcessor] Computed timestamps for plant', {
+        crop: action.crop,
+        plantedAt: now,
+        wateredAt: now,
+        readyAt,
+        expiresAt,
+        stageDuration: cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC,
+        expirationWindow: expiresAt - now,
+      });
     }
 
     const event = await user.signer.signEvent({
@@ -748,18 +790,22 @@ async function applyAction(
       ['stage', currentStage.toString()], // AUTHORITATIVE: Preserve current stage
       ['stage_started_at', newStageStartedAt.toString()], // NEW: Reset if water-blocked
       ['planted_at', currentSlot.plantedAt?.toString() ?? now.toString()],
-      ['watered_at', now.toString()], // Update water timestamp
+      ['watered_at', now.toString()], // ALWAYS update water timestamp
       ['water_count', waterCount.toString()],
       ['status', currentSlot.status ?? 'healthy'],
       ['t', action.worldId],
     ];
 
-    // Preserve existing ready_at and expires_at if present
+    // Preserve existing ready_at
     if (currentSlot.readyAt) {
       tags.push(['ready_at', currentSlot.readyAt.toString()]);
     }
-    if (currentSlot.expiresAt) {
-      tags.push(['expires_at', currentSlot.expiresAt.toString()]);
+    
+    // NEW EXPIRATION MODEL: ALWAYS refresh expires_at on water
+    // Expiration is stage-based: watered_at + 2× stageDuration
+    if (cropMeta) {
+      const expiresAt = computeExpirationTime(now, cropMeta);
+      tags.push(['expires_at', expiresAt.toString()]);
     }
 
     const event = await user.signer.signEvent({

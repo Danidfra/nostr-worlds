@@ -581,16 +581,21 @@ function ResponsiveWorldView({
 /**
  * Format seconds remaining into human-readable time
  */
-function formatTimeRemaining(seconds: number): string {
+/**
+ * Format a duration in seconds to a human-readable string
+ * Returns only the duration (e.g., "5m", "2h", "30s") without any labels
+ * Labels should be added by the caller for context
+ */
+function formatDuration(seconds: number): string {
   if (seconds < 60) {
-    return `Ready in ${Math.ceil(seconds)}s`;
+    return `${Math.ceil(seconds)}s`;
   }
   const minutes = Math.ceil(seconds / 60);
   if (minutes < 60) {
-    return `Ready in ${minutes}m`;
+    return `${minutes}m`;
   }
   const hours = Math.ceil(minutes / 60);
-  return `Ready in ${hours}h`;
+  return `${hours}h`;
 }
 
 /**
@@ -833,14 +838,14 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
         <div className="absolute left-1/2 -translate-x-1/2 -top-10 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none space-y-0.5">
           {/* Show "Ready in" if not yet ready, or "Ready!" if harvestable */}
           {!ready && secondsUntilReady !== null && secondsUntilReady > 0 ? (
-            <div>Ready in: {formatTimeRemaining(secondsUntilReady)}</div>
+            <div>Ready in: {formatDuration(secondsUntilReady)}</div>
           ) : ready ? (
             <div className="text-green-400">Ready!</div>
           ) : null}
           
           {/* Show "Expires in" if expiresAt is set and not expired yet */}
           {secondsUntilExpires !== null && secondsUntilExpires > 0 && (
-            <div className="text-orange-400">Expires in: {formatTimeRemaining(secondsUntilExpires)}</div>
+            <div className="text-orange-400">Expires in: {formatDuration(secondsUntilExpires)}</div>
           )}
         </div>
       )}
