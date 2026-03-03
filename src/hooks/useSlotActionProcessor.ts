@@ -5,7 +5,7 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction, CropsMetadata } from '@/lib/nostr/types';
 import type { NostrEvent } from '@nostrify/nostrify';
-import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater } from '@/lib/game/growth';
+import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater, isWet } from '@/lib/game/growth';
 
 /** Default stage duration in seconds (5 minutes) */
 const DEFAULT_STAGE_DURATION_SEC = 300;
@@ -682,7 +682,7 @@ async function applyAction(
       throw new Error('Missing crop for plant action');
     }
 
-    // Build base tags with NEW per-stage timing fields
+    // Build base tags - FRESHLY PLANTED CROPS START DRY
     const tags: string[][] = [
       ['d', action.slotD],
       ['v', '1'],
@@ -692,15 +692,15 @@ async function applyAction(
       ['type', 'plant'],
       ['crop', action.crop],
       ['stage', '0'], // AUTHORITATIVE: Start at stage 0
-      ['stage_started_at', now.toString()], // NEW: Per-stage timing starts now
+      ['stage_started_at', now.toString()], // Per-stage timing reference
       ['planted_at', now.toString()],
-      ['watered_at', now.toString()], // NEW: Initialize watered_at = now for expiration
+      // CRITICAL: Do NOT set watered_at (plant starts DRY, needs watering to begin growth)
       ['water_count', '0'], // Initialize water count to 0
       ['status', 'healthy'],
       ['t', action.worldId],
     ];
 
-    // Compute ready_at and expires_at if crop metadata available
+    // Compute ready_at if crop metadata available
     const cropMeta = cropsMetadata?.crops?.[action.crop];
     if (cropMeta) {
       const readyAt = computeReadyTime(now, cropMeta);
@@ -708,18 +708,16 @@ async function applyAction(
         tags.push(['ready_at', readyAt.toString()]);
       }
       
-      // NEW EXPIRATION MODEL: Stage-based (2× stageDuration from watered_at)
-      const expiresAt = computeExpirationTime(now, cropMeta);
-      tags.push(['expires_at', expiresAt.toString()]);
+      // CRITICAL: Do NOT set expires_at at plant time
+      // Expiration is relative to watering (expires_at = watered_at + 2× stageDuration)
+      // Plant starts dry, so no expiration until first watering
 
-      console.log('[SlotActionProcessor] Computed timestamps for plant', {
+      console.log('[SlotActionProcessor] Planted crop (starts DRY)', {
         crop: action.crop,
         plantedAt: now,
-        wateredAt: now,
+        wateredAt: 'NOT SET (dry)',
         readyAt,
-        expiresAt,
-        stageDuration: cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC,
-        expirationWindow: expiresAt - now,
+        needsWatering: true,
       });
     }
 
@@ -751,32 +749,35 @@ async function applyAction(
     const currentStage = currentSlot.stage ?? 0;
     const currentStageStartedAt = currentSlot.stageStartedAt ?? currentSlot.plantedAt ?? now;
 
-    // Get crop metadata to check if plant was water-blocked
+    // Get crop metadata to check if plant was dry before watering
     const cropMeta = cropsMetadata?.crops?.[currentSlot.crop];
     
-    // Determine if plant was water-blocked (needs to restart stage timer)
+    // Determine if stage_started_at should be reset
+    // RULE: Only reset stage timer if plant was DRY before watering
+    // If already wet, watering again should NOT reset the stage timer
     let newStageStartedAt = currentStageStartedAt;
+    let wasDry = false;
+    
     if (cropMeta) {
-      const stageDuration = cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
-        ? cropMeta.stageDurationSec
-        : 300; // DEFAULT_STAGE_DURATION_SEC
+      // Check if plant was dry before this watering
+      wasDry = !isWet(currentSlot, now, cropMeta);
       
-      const elapsedSec = now - currentStageStartedAt;
-      const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
-      
-      // Was the plant blocked by water (time elapsed but water was limiting)?
-      const canAdvanceByTime = elapsedSec >= stageDuration;
-      const stageUnlockedBefore = currentSlot.waterCount ?? 0;
-      const wasWaterBlocked = canAdvanceByTime && currentStage >= stageUnlockedBefore && currentStage < harvestStage;
-      
-      // If plant was water-blocked, restart the stage timer now
-      if (wasWaterBlocked) {
+      if (wasDry) {
+        // Plant was dry → start the wet growth window
         newStageStartedAt = now;
-        console.log('[SlotActionProcessor] Plant was water-blocked, restarting stage timer', {
+        console.log('[SlotActionProcessor] Plant was dry, starting wet growth window', {
           slotD: action.slotD,
           currentStage,
           waterCount,
           stageStartedAt: newStageStartedAt,
+        });
+      } else {
+        // Plant was already wet → keep existing stage timer
+        console.log('[SlotActionProcessor] Plant was already wet, keeping stage timer', {
+          slotD: action.slotD,
+          currentStage,
+          waterCount,
+          stageStartedAt: currentStageStartedAt,
         });
       }
     }
