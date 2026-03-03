@@ -14,6 +14,45 @@ const DEFAULT_STAGE_DURATION_SEC = 300;
 export const EXPIRATION_GRACE_PERIOD_SEC = 3600;
 
 /**
+ * Check if a plant is currently "wet" (has been watered recently)
+ * 
+ * Wetness Model (Authoritative):
+ * - A plant is wet if it was watered within the last stageDuration
+ * - Wetness determines whether:
+ *   1. Growth time progresses (dry plants pause)
+ *   2. Rotting is allowed (plants only rot while dry)
+ * 
+ * Rules:
+ * - If no wateredAt → not wet
+ * - stageDuration = cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC
+ * - A plant is wet if (nowSec - wateredAt) < stageDuration
+ * 
+ * @param slot - SlotState with plant data
+ * @param nowSec - Current unix timestamp
+ * @param cropMeta - Crop metadata from renderpack
+ * @returns True if plant is currently wet
+ */
+export function isWet(
+  slot: SlotState,
+  nowSec: number,
+  cropMeta: CropMetadata
+): boolean {
+  // If no watered_at timestamp, plant is not wet
+  if (!slot.wateredAt) {
+    return false;
+  }
+
+  const stageDuration =
+    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+      ? cropMeta.stageDurationSec
+      : DEFAULT_STAGE_DURATION_SEC;
+
+  // Plant is wet if watered within the last stageDuration
+  const timeSinceWatering = nowSec - slot.wateredAt;
+  return timeSinceWatering < stageDuration;
+}
+
+/**
  * Compute when a plant expires (becomes rotten) - NEW STAGE-BASED MODEL
  * 
  * Expiration is now relative to the last watering time, not total plant lifetime.
@@ -118,25 +157,32 @@ export function computeGrowthStage(
 }
 
 /**
- * Compute seconds until the next growth stage
+ * Compute seconds until the next growth stage (UPDATED for per-stage timing)
  * 
- * @param plantedAtSec - Unix timestamp when plant was planted
+ * Uses stage_started_at for accurate single-stage countdown.
+ * Time is measured from when THIS stage started, not from planting.
+ * 
+ * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
  * @param cropMeta - Crop metadata from renderpack
- * @param currentStage - Current computed stage
  * @returns Seconds until next stage, or null if already at max stage
  */
 export function computeSecondsUntilNextStage(
-  plantedAtSec: number,
+  slot: SlotState,
   nowSec: number,
-  cropMeta: CropMetadata,
-  currentStage: number
+  cropMeta: CropMetadata
 ): number | null {
+  // Get current stage
+  const currentStage = slot.stage ?? 0;
+  
   // Check if already at max stage
   const maxStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
   if (currentStage >= maxStage) {
     return null; // Already fully grown
   }
+
+  // Get stage_started_at (use fallback chain)
+  const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
 
   // Get stage duration
   const stageDuration =
@@ -144,8 +190,8 @@ export function computeSecondsUntilNextStage(
       ? cropMeta.stageDurationSec
       : DEFAULT_STAGE_DURATION_SEC;
 
-  // Calculate when next stage happens
-  const nextStageTime = plantedAtSec + (currentStage + 1) * stageDuration;
+  // Calculate when next stage happens (from stage_started_at + stageDuration)
+  const nextStageTime = stageStartedAt + stageDuration;
   const secondsRemaining = Math.max(0, nextStageTime - nowSec);
 
   return secondsRemaining;
@@ -154,35 +200,42 @@ export function computeSecondsUntilNextStage(
 /**
  * Compute growth stage with water-gated progression and per-stage timing
  * 
- * NEW IMPLEMENTATION: Per-stage timing to prevent "banked time" exploits
+ * WETNESS MODEL: Growth only progresses while plant is wet
  * 
  * Rules:
- * 1. Each stage requires BOTH enough elapsed time AND enough water
- * 2. Time is measured from stage_started_at (not plantedAt)
- * 3. When water unlocks a new stage, stage_started_at resets to "now"
- * 4. A plant can advance at most 1 stage per stageDurationSec interval
+ * 1. Plant must be WET for time to progress (dry plants pause)
+ * 2. Each stage requires BOTH enough elapsed time AND enough water
+ * 3. Time is measured from stage_started_at (not plantedAt)
+ * 4. When water unlocks a new stage, stage_started_at resets to "now"
+ * 5. A plant can advance at most 1 stage per stageDurationSec interval
  * 
- * This prevents the exploit where:
- * - Plant sits unwatered for 30 minutes
- * - Player waters it multiple times quickly
- * - Plant instantly jumps multiple stages (OLD BEHAVIOR - FIXED)
+ * This prevents exploits:
+ * - Dry plants cannot accumulate "banked time"
+ * - Leaving a plant dry for 30 minutes does NOT allow instant jumps
+ * - Time only progresses while wet
  * 
- * @param currentStage - Current authoritative stage from SlotState
- * @param stageStartedAtSec - Unix timestamp when current stage timer started
- * @param waterCount - Number of times plant has been watered
+ * @param slot - SlotState with plant data (needed for wetness check)
  * @param nowSec - Current unix timestamp
  * @param cropMeta - Crop metadata from renderpack
  * @returns New computed stage index (0-based)
  */
 export function computeGrowthStageWithWater(
-  currentStage: number,
-  stageStartedAtSec: number,
-  waterCount: number | undefined,
+  slot: SlotState,
   nowSec: number,
   cropMeta: CropMetadata
 ): number {
+  // Get current stage and stage_started_at from slot
+  const currentStage = slot.stage ?? 0;
+  const stageStartedAtSec = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
+
   // Handle clock skew - if now is before stage started time, stay at current stage
   if (nowSec < stageStartedAtSec) {
+    return currentStage;
+  }
+
+  // CRITICAL: Growth only progresses while plant is WET
+  // If plant is NOT wet → DO NOT advance stage (time pauses when dry)
+  if (!isWet(slot, nowSec, cropMeta)) {
     return currentStage;
   }
 
@@ -203,7 +256,8 @@ export function computeGrowthStageWithWater(
 
   // Calculate stage unlocked by water_count
   // water_count gates how far the plant can progress
-  const stageUnlocked = Math.max(0, Math.min(waterCount ?? 0, harvestStage));
+  const waterCount = slot.waterCount ?? 0;
+  const stageUnlocked = Math.max(0, Math.min(waterCount, harvestStage));
 
   // Can we advance based on water?
   const canAdvanceByWater = currentStage < stageUnlocked;
@@ -263,11 +317,13 @@ export function computeGrowthStageWithWaterLegacy(
 }
 
 /**
- * Check if a plant needs watering (NEW implementation with per-stage timing)
+ * Check if a plant needs watering (SIMPLIFIED with wetness model)
  * 
- * A plant needs water when:
- * - The plant has enough time to advance to the next stage
- * - But water_count is blocking progression
+ * A plant needs water whenever:
+ * - Plant is not harvestable (not at final stage)
+ * - AND plant is not wet (dry)
+ * 
+ * Simple rule: Non-harvestable plants need water when dry.
  * 
  * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
@@ -282,15 +338,6 @@ export function needsWater(
   // Get current stage (authoritative from SlotState, or fallback to 0)
   const currentStage = slot.stage ?? 0;
   
-  // Get stage_started_at (or fallback to plantedAt or event.created_at)
-  const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
-  
-  // Get stage duration (with default fallback)
-  const stageDuration =
-    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
-      ? cropMeta.stageDurationSec
-      : DEFAULT_STAGE_DURATION_SEC;
-
   // Determine harvest stage (final stage)
   const harvestStage = cropMeta.harvestStage ?? (cropMeta.stages - 1);
   
@@ -299,44 +346,49 @@ export function needsWater(
     return false;
   }
 
-  // Calculate elapsed time since THIS stage started
-  const elapsedSec = nowSec - stageStartedAt;
-
-  // Has enough time passed to advance to the next stage?
-  const canAdvanceByTime = elapsedSec >= stageDuration;
-
-  // Calculate stage unlocked by water_count
-  const waterCount = slot.waterCount ?? 0;
-  const stageUnlocked = Math.max(0, Math.min(waterCount, harvestStage));
-
-  // Can we advance based on water?
-  const canAdvanceByWater = currentStage < stageUnlocked;
-
-  // Needs water if: time allows advancement but water blocks it
-  return canAdvanceByTime && !canAdvanceByWater;
+  // Needs water if plant is NOT wet (dry plants need watering)
+  return !isWet(slot, nowSec, cropMeta);
 }
 
 /**
- * Check if a plant is rotten/expired
+ * Check if a plant is rotten/expired (UPDATED with wetness model)
  * 
  * A plant is rotten if:
  * - It has a status tag set to 'rotten'
- * - OR it has expired (nowSec > expiresAt)
+ * - OR it is DRY and expired (nowSec > expiresAt)
+ * 
+ * CRITICAL: Expiration only applies while dry
+ * - Wet plants cannot rot (watering prevents rotting)
+ * - Dry plants rot after expires_at
  * 
  * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
+ * @param cropMeta - Crop metadata from renderpack
  * @returns True if plant is rotten
  */
-export function isRotten(slot: SlotState, nowSec: number): boolean {
+export function isRotten(
+  slot: SlotState,
+  nowSec: number,
+  cropMeta: CropMetadata
+): boolean {
+  // Already marked as rotten
   if (slot.status === 'rotten') {
     return true;
   }
   
-  if (slot.expiresAt && nowSec > slot.expiresAt) {
-    return true;
+  // No expiration time set
+  if (!slot.expiresAt) {
+    return false;
   }
   
-  return false;
+  // CRITICAL: Plants only rot while DRY
+  // If plant is wet → cannot rot (watering prevents rotting)
+  if (isWet(slot, nowSec, cropMeta)) {
+    return false;
+  }
+  
+  // Plant is dry AND past expiration → rotten
+  return nowSec > slot.expiresAt;
 }
 
 /**
@@ -357,7 +409,7 @@ export function isHarvestableSlot(
   cropMeta: CropMetadata
 ): boolean {
   // Cannot harvest rotten plants
-  if (isRotten(slot, nowSec)) {
+  if (isRotten(slot, nowSec, cropMeta)) {
     return false;
   }
 

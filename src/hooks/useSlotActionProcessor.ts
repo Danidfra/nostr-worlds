@@ -146,8 +146,13 @@ export function useSlotActionProcessor(
         // Skip if already rotten
         if (slot.status === 'rotten') continue;
 
+        // Get crop metadata for rotting check
+        if (!slot.crop) continue;
+        const slotCropMeta = cropsMetadata.crops?.[slot.crop];
+        if (!slotCropMeta) continue;
+
         // Check if expired
-        if (isRotten(slot, now)) {
+        if (isRotten(slot, now, slotCropMeta)) {
           console.log('[SlotActionProcessor] Plant expired, marking as rotten', {
             slotD: slot.id,
             expiresAt: slot.expiresAt,
@@ -221,11 +226,9 @@ export function useSlotActionProcessor(
         if (!cropMeta) continue;
 
         const currentStage = slot.stage ?? 0;
-        const stageStartedAt = slot.stageStartedAt ?? slot.plantedAt ?? slot.event.created_at;
-        const waterCount = slot.waterCount ?? 0;
 
-        // Use the new computeGrowthStageWithWater function
-        const newStage = computeGrowthStageWithWater(currentStage, stageStartedAt, waterCount, now, cropMeta);
+        // Use the new computeGrowthStageWithWater function (wetness model)
+        const newStage = computeGrowthStageWithWater(slot, now, cropMeta);
 
         // If stage advanced, publish updated SlotState
         if (newStage > currentStage) {
@@ -251,7 +254,7 @@ export function useSlotActionProcessor(
               ['stage', newStage.toString()], // AUTHORITATIVE: New stage
               ['stage_started_at', now.toString()], // NEW: Reset stage timer
               ['planted_at', slot.plantedAt?.toString() ?? now.toString()],
-              ['water_count', waterCount.toString()],
+              ['water_count', (slot.waterCount ?? 0).toString()],
               ['status', slot.status ?? 'healthy'],
               ['t', slot.worldId],
             ];

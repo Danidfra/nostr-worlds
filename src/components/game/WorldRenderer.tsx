@@ -12,7 +12,7 @@ import { useSlotActionProcessor } from '@/hooks/useSlotActionProcessor';
 import { useNowSeconds } from '@/hooks/useNowSeconds';
 import { DEFAULT_GAME_RELAY } from '@/lib/nostr/config';
 import { computeGrid } from '@/lib/renderer/grid';
-import { computeSecondsUntilReady, isHarvestableSlot, isRotten, needsWater } from '@/lib/game/growth';
+import { computeSecondsUntilNextStage, isHarvestableSlot, isRotten, isWet, needsWater } from '@/lib/game/growth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -321,7 +321,7 @@ function ResponsiveWorldView({
     const plantedAt = slot.plantedAt ?? slot.event.created_at;
     
     // Check if plant is rotten
-    const plantIsRotten = isRotten(slot, nowSec);
+    const plantIsRotten = isRotten(slot, nowSec, cropMeta);
     if (plantIsRotten) {
       console.log('[handlePlantClick] Clearing rotten plant', {
         crop: slot.crop,
@@ -678,7 +678,7 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
     : undefined;
 
   // Check if plant is rotten/expired (needed for determining if we should preload rotten image)
-  const plantIsRotten = isRotten(slot, nowSec);
+  const plantIsRotten = cropMeta ? isRotten(slot, nowSec, cropMeta) : false;
 
   // Validate if rotten image can be loaded (MUST be before early returns for hooks rules)
   const rottenImageLoaded = useImageLoaded(
@@ -724,15 +724,18 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
   // Fallback to 0 for legacy events without stage tag
   const computedStage = slot.stage ?? 0;
 
-  // Compute seconds until plant is ready to harvest (for "Ready in" tooltip)
-  const secondsUntilReady = cropMeta
-    ? computeSecondsUntilReady(slot, nowSec, cropMeta)
+  // Compute seconds until NEXT STAGE (single-stage countdown)
+  const secondsUntilNextStage = cropMeta
+    ? computeSecondsUntilNextStage(slot, nowSec, cropMeta)
     : null;
 
   // Compute seconds until expiration (for "Expires in" tooltip)
   const secondsUntilExpires = slot.expiresAt
     ? Math.max(0, slot.expiresAt - nowSec)
     : null;
+
+  // Check if plant is wet (has been watered recently)
+  const plantIsWet = cropMeta ? isWet(slot, nowSec, cropMeta) : false;
 
   // Check if plant needs watering
   const plantsNeedsWater = cropMeta ? needsWater(slot, nowSec, cropMeta) : false;
@@ -833,14 +836,19 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
         </div>
       )}
       
-      {/* Tooltip: Plant status (Ready in / Expires in) */}
+      {/* Tooltip: Plant status (Next stage / Paused / Ready) */}
       {!showDebug && !plantIsRotten && !plantsNeedsWater && isHovered && cropMeta && (
         <div className="absolute left-1/2 -translate-x-1/2 -top-10 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20 pointer-events-none space-y-0.5">
-          {/* Show "Ready in" if not yet ready, or "Ready!" if harvestable */}
-          {!ready && secondsUntilReady !== null && secondsUntilReady > 0 ? (
-            <div>Ready in: {formatDuration(secondsUntilReady)}</div>
-          ) : ready ? (
+          {/* Show stage progression status */}
+          {ready ? (
+            // At harvest stage - ready to harvest
             <div className="text-green-400">Ready!</div>
+          ) : !plantIsWet ? (
+            // Dry plant - paused (no progression)
+            <div className="text-yellow-400">Paused — needs water</div>
+          ) : secondsUntilNextStage !== null && secondsUntilNextStage > 0 ? (
+            // Wet plant - show countdown to next stage
+            <div>Next stage in: {formatDuration(secondsUntilNextStage)}</div>
           ) : null}
           
           {/* Show "Expires in" if expiresAt is set and not expired yet */}
@@ -865,11 +873,11 @@ function SlotSprite({ slot, grid, renderpack, showDebug, nowSec, isHovered }: Sl
           <div>Slot: {slot.slot.x},{slot.slot.y}</div>
           <div>Planted: {new Date(plantedAt * 1000).toLocaleTimeString()}</div>
           <div>Now: {new Date(nowSec * 1000).toLocaleTimeString()}</div>
-          <div>Elapsed: {nowSec - plantedAt}s</div>
-          {secondsUntilReady !== null && secondsUntilReady > 0 && (
-            <div className="text-green-400">Ready in: {secondsUntilReady}s</div>
+          <div>Wet: {plantIsWet ? 'Yes' : 'No'}</div>
+          {secondsUntilNextStage !== null && secondsUntilNextStage > 0 && (
+            <div className="text-green-400">Next stage: {secondsUntilNextStage}s</div>
           )}
-          {secondsUntilReady === null && ready && (
+          {ready && (
             <div className="text-yellow-400">Ready to harvest!</div>
           )}
           {secondsUntilExpires !== null && secondsUntilExpires > 0 && (
