@@ -25,7 +25,13 @@ export const EXPIRATION_GRACE_PERIOD_SEC = 3600;
  * Rules:
  * - If no wateredAt → not wet
  * - stageDuration = cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC
- * - A plant is wet if (nowSec - wateredAt) < stageDuration
+ * - A plant is wet if (nowSec - wateredAt) <= stageDuration (INCLUSIVE)
+ * 
+ * CRITICAL: The <= comparison is required to prevent stage progression deadlock.
+ * At exactly elapsedSec === stageDuration:
+ * - isWet() returns true (boundary is inclusive)
+ * - computeGrowthStageWithWater() can advance (elapsedSec >= stageDuration)
+ * - Both conditions satisfied → stage advances successfully
  * 
  * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
@@ -47,9 +53,9 @@ export function isWet(
       ? cropMeta.stageDurationSec
       : DEFAULT_STAGE_DURATION_SEC;
 
-  // Plant is wet if watered within the last stageDuration
+  // Plant is wet if watered within the last stageDuration (INCLUSIVE boundary)
   const timeSinceWatering = nowSec - slot.wateredAt;
-  return timeSinceWatering < stageDuration;
+  return timeSinceWatering <= stageDuration;
 }
 
 /**
