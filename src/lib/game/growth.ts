@@ -13,25 +13,45 @@ const DEFAULT_STAGE_DURATION_SEC = 300;
  */
 export const EXPIRATION_GRACE_PERIOD_SEC = 3600;
 
+const WET_EPSILON_SEC = 2; // ou 1
+
+/**
+ * Get the effective wet_until timestamp for a slot
+ * Handles backward compatibility for slots with only watered_at
+ */
+export function getWetUntil(
+  slot: SlotState,
+  cropMeta: CropMetadata
+): number {
+  // If we have explicit wet_until, use it
+  if (slot.wetUntil !== undefined) {
+    return slot.wetUntil;
+  }
+
+  // Fallback: if we have watered_at, calculate legacy wet_until
+  // Legacy model: wet for waterDurationSec (or stageDurationSec) after watering
+  if (slot.wateredAt !== undefined) {
+    const waterDuration = cropMeta.waterDurationSec && cropMeta.waterDurationSec > 0
+      ? cropMeta.waterDurationSec
+      : (cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
+        ? cropMeta.stageDurationSec
+        : DEFAULT_STAGE_DURATION_SEC);
+    
+    return slot.wateredAt + waterDuration;
+  }
+
+  // Not wet
+  return 0;
+}
+
 /**
  * Check if a plant is currently "wet" (has been watered recently)
  * 
  * Wetness Model (Authoritative):
- * - A plant is wet if it was watered within the last stageDuration
+ * - A plant is wet if nowSec < wetUntil
  * - Wetness determines whether:
  *   1. Growth time progresses (dry plants pause)
  *   2. Rotting is allowed (plants only rot while dry)
- * 
- * Rules:
- * - If no wateredAt → not wet
- * - stageDuration = cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC
- * - A plant is wet if (nowSec - wateredAt) <= stageDuration (INCLUSIVE)
- * 
- * CRITICAL: The <= comparison is required to prevent stage progression deadlock.
- * At exactly elapsedSec === stageDuration:
- * - isWet() returns true (boundary is inclusive)
- * - computeGrowthStageWithWater() can advance (elapsedSec >= stageDuration)
- * - Both conditions satisfied → stage advances successfully
  * 
  * @param slot - SlotState with plant data
  * @param nowSec - Current unix timestamp
@@ -43,44 +63,36 @@ export function isWet(
   nowSec: number,
   cropMeta: CropMetadata
 ): boolean {
-  // If no watered_at timestamp, plant is not wet
-  if (!slot.wateredAt) {
-    return false;
-  }
-
-  const stageDuration =
-    cropMeta.stageDurationSec && cropMeta.stageDurationSec > 0
-      ? cropMeta.stageDurationSec
-      : DEFAULT_STAGE_DURATION_SEC;
-
-  // Plant is wet if watered within the last stageDuration (INCLUSIVE boundary)
-  const timeSinceWatering = nowSec - slot.wateredAt;
-  return timeSinceWatering <= stageDuration;
+  const wetUntil = getWetUntil(slot, cropMeta);
+  
+  // Plant is wet if current time is before wet_until (with epsilon)
+  return nowSec < wetUntil + WET_EPSILON_SEC;
 }
 
 /**
- * Compute when a plant expires (becomes rotten) - NEW STAGE-BASED MODEL
+ * Compute when a plant expires (becomes rotten) - WET_UNTIL MODEL
  * 
- * Expiration is now relative to the last watering time, not total plant lifetime.
+ * Expiration is now relative to when the plant becomes dry (wet_until).
  * 
- * Rule: A plant expires after 2× the time required to reach the next stage
- * Time is counted from the last watered_at timestamp.
+ * Rule: A plant expires after 2× the stage duration AFTER it becomes dry
+ * Time is counted from when wetness expires (wet_until timestamp).
  * 
- * Formula: expires_at = watered_at + 2 * stageDuration
+ * Formula: expires_at = wet_until + 2 * stageDuration
  * 
  * Examples (stageDuration = 5 min):
- * - Plant watered at 10:00 → expires at 10:10 (2 × 5 min)
- * - If watered again at 10:05 → expires at 10:15 (resets)
+ * - Plant wet until 10:00 → expires at 10:10 (2 × 5 min after becoming dry)
+ * - If watered again, wet_until extends → expiration also extends
  * 
  * This matches intuitive gameplay:
- * - If next stage takes 5 minutes → plant rots after 10 minutes without interaction
+ * - Plants rot after being dry for too long (2× stage duration)
+ * - Wet plants cannot rot (wetness prevents rotting)
  * 
- * @param wateredAtSec - Unix timestamp when plant was last watered
+ * @param wetUntilSec - Unix timestamp until which plant remains wet
  * @param cropMeta - Crop metadata from renderpack
  * @returns Unix timestamp when plant expires
  */
 export function computeExpirationTime(
-  wateredAtSec: number,
+  wetUntilSec: number,
   cropMeta: CropMetadata
 ): number {
   const stageDuration =
@@ -88,7 +100,7 @@ export function computeExpirationTime(
       ? cropMeta.stageDurationSec
       : DEFAULT_STAGE_DURATION_SEC;
   
-  return wateredAtSec + (2 * stageDuration);
+  return wetUntilSec + (2 * stageDuration);
 }
 
 /**
@@ -260,17 +272,9 @@ export function computeGrowthStageWithWater(
   // Can we advance by 1 stage based on time?
   const canAdvanceByTime = elapsedSec >= stageDuration;
 
-  // Calculate stage unlocked by water_count
-  // water_count gates how far the plant can progress
-  const waterCount = slot.waterCount ?? 0;
-  const stageUnlocked = Math.max(0, Math.min(waterCount, harvestStage));
-
-  // Can we advance based on water?
-  const canAdvanceByWater = currentStage < stageUnlocked;
-
-  // Only advance 1 stage if BOTH time and water allow it
+  // Only advance 1 stage if time allows it (and plant is wet)
   let newStage = currentStage;
-  if (canAdvanceByTime && canAdvanceByWater) {
+  if (canAdvanceByTime) {
     newStage = Math.min(currentStage + 1, harvestStage);
   }
 

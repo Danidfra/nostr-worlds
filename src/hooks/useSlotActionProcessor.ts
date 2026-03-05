@@ -5,7 +5,7 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { parseSlotAction, parseSlotState, getSlotRevision } from '@/lib/nostr/tags';
 import type { SlotState, SlotAction, CropsMetadata } from '@/lib/nostr/types';
 import type { NostrEvent } from '@nostrify/nostrify';
-import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater, isWet } from '@/lib/game/growth';
+import { isRotten, computeReadyTime, computeExpirationTime, isHarvestableSlot, computeGrowthStageWithWater, isWet, getWetUntil } from '@/lib/game/growth';
 
 /** Default stage duration in seconds (5 minutes) */
 const DEFAULT_STAGE_DURATION_SEC = 300;
@@ -182,6 +182,9 @@ export function useSlotActionProcessor(
             if (slot.wateredAt) {
               tags.push(['watered_at', slot.wateredAt.toString()]);
             }
+            if (slot.wetUntil) {
+              tags.push(['wet_until', slot.wetUntil.toString()]);
+            }
             if (slot.waterCount) {
               tags.push(['water_count', slot.waterCount.toString()]);
             }
@@ -262,6 +265,9 @@ export function useSlotActionProcessor(
             // Preserve existing timestamps
             if (slot.wateredAt) {
               tags.push(['watered_at', slot.wateredAt.toString()]);
+            }
+            if (slot.wetUntil) {
+              tags.push(['wet_until', slot.wetUntil.toString()]);
             }
             if (slot.readyAt) {
               tags.push(['ready_at', slot.readyAt.toString()]);
@@ -757,6 +763,7 @@ async function applyAction(
     // If already wet, watering again should NOT reset the stage timer
     let newStageStartedAt = currentStageStartedAt;
     let wasDry = false;
+    let newWetUntil = now;
     
     if (cropMeta) {
       // Check if plant was dry before this watering
@@ -780,6 +787,21 @@ async function applyAction(
           stageStartedAt: currentStageStartedAt,
         });
       }
+
+      // Calculate new wet_until
+      // newWetUntil = max(currentWetUntil, now) + waterDurationSec
+      const currentWetUntil = getWetUntil(currentSlot, cropMeta);
+      
+      const waterDuration = cropMeta.waterDurationSec && cropMeta.waterDurationSec > 0
+        ? cropMeta.waterDurationSec
+        : (cropMeta.stageDurationSec ?? DEFAULT_STAGE_DURATION_SEC);
+      
+      newWetUntil = Math.max(currentWetUntil, now) + waterDuration;
+
+      // Apply optional safety cap
+      if (cropMeta.maxWetBufferSec && cropMeta.maxWetBufferSec > 0) {
+        newWetUntil = Math.min(newWetUntil, now + cropMeta.maxWetBufferSec);
+      }
     }
 
     // Build tags for watered plant
@@ -794,7 +816,8 @@ async function applyAction(
       ['stage', currentStage.toString()], // AUTHORITATIVE: Preserve current stage
       ['stage_started_at', newStageStartedAt.toString()], // NEW: Reset if water-blocked
       ['planted_at', currentSlot.plantedAt?.toString() ?? now.toString()],
-      ['watered_at', now.toString()], // ALWAYS update water timestamp
+      ['watered_at', now.toString()], // ALWAYS update water timestamp (Legacy compatibility)
+      ['wet_until', newWetUntil.toString()], // NEW: Wetness model
       ['water_count', waterCount.toString()],
       ['status', currentSlot.status ?? 'healthy'],
       ['t', action.worldId],
@@ -806,9 +829,9 @@ async function applyAction(
     }
     
     // NEW EXPIRATION MODEL: ALWAYS refresh expires_at on water
-    // Expiration is stage-based: watered_at + 2× stageDuration
+    // Expiration is wet_until-based: wet_until + 2× stageDuration
     if (cropMeta) {
-      const expiresAt = computeExpirationTime(now, cropMeta);
+      const expiresAt = computeExpirationTime(newWetUntil, cropMeta);
       tags.push(['expires_at', expiresAt.toString()]);
     }
 
@@ -824,6 +847,7 @@ async function applyAction(
     console.log('[SlotActionProcessor] Published watered SlotState', {
       slotD: action.slotD,
       wateredAt: now,
+      wetUntil: newWetUntil,
       waterCount,
       stage: currentStage,
       stageStartedAt: newStageStartedAt,

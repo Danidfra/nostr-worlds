@@ -89,9 +89,17 @@ export interface SlotState {
   stageStartedAt?: number;
   /** Planting timestamp - Used for time-based growth computation */
   plantedAt?: number;
-  /** Last watering timestamp - Required for stage progression */
+  /** 
+   * Last watering timestamp
+   * @deprecated Use wetUntil instead. Kept for backward compatibility.
+   */
   wateredAt?: number;
-  /** Water count - Number of times plant has been watered */
+  /** Timestamp until which the plant remains wet - Replaces wateredAt logic */
+  wetUntil?: number;
+  /** 
+   * Water count - Number of times plant has been watered
+   * @deprecated Use wetUntil/waterDurationSec for progression logic.
+   */
   waterCount?: number;
   /** Ready-to-harvest timestamp - Set when plant reaches final stage */
   readyAt?: number;
@@ -171,6 +179,10 @@ export interface CropMetadata {
   harvestStage?: number;
   /** Duration in seconds per growth stage (for time-based growth) */
   stageDurationSec?: number;
+  /** Amount of wet time added by each watering action (defaults to stageDurationSec if missing) */
+  waterDurationSec?: number;
+  /** Optional cap on how much wet time can be accumulated relative to "now" */
+  maxWetBufferSec?: number;
   /** Rotten sprite filename (relative to renderpack) */
   rottenFile?: string;
 }
